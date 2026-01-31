@@ -11,6 +11,9 @@ export interface FurnitureItem {
   x: number; // units (inches relative to room origin)
   y: number; // units
   rotation: number; // degrees, typically 0 or 90
+  imageUrl?: string; // Optional base64 data URL for photo-based items
+  depth?: number; // Visual Z-height
+  color?: string; // Hex color
 }
 
 export interface LayoutState {

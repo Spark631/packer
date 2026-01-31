@@ -2,11 +2,16 @@
 
 import React, { useState, useEffect } from "react";
 import { Stage, Layer, Rect, Group, Line } from "react-konva";
-import { LayoutState } from "../types";
-import { RotateCw, Trash2, Plus, X, Copy, RotateCcw, Share2 } from "lucide-react";
+import { LayoutState, FurnitureItem } from "../types";
+import { RotateCw, Trash2, Plus, X, Copy, RotateCcw, Share2, Camera, Box, LayoutGrid } from "lucide-react";
 import { checkValidity } from "../utils/geometry";
 import { FURNITURE_PRESETS, FurniturePreset } from "../data/presets";
 import { serializeLayout, deserializeLayout } from "../utils/serialization";
+import ImageModelCreator from "./ImageModelCreator";
+import URLImage from "./URLImage";
+import ExtrudedRect from "./ExtrudedRect";
+import RoomWalls from "./RoomWalls";
+import ThreeScene from "./ThreeScene"; // Import the new component
 
 interface LayoutEditorProps {
   initialState: LayoutState;
@@ -18,6 +23,11 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   const [invalidItems, setInvalidItems] = useState<Set<string>>(new Set());
   const [isAddPanelOpen, setIsAddPanelOpen] = useState(false);
   const [isShared, setIsShared] = useState(false);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [isThreeSceneOpen, setIsThreeSceneOpen] = useState(false); // New state for 3D overlay
+  
+  // View Mode: '2d' or 'iso'
+  const [viewMode, setViewMode] = useState<'2d' | 'iso'>('iso');
 
   // Handle window resize for responsive stage
   useEffect(() => {
@@ -73,8 +83,34 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   const roomPixelWidth = layout.room.width * PIXELS_PER_UNIT;
   const roomPixelHeight = layout.room.height * PIXELS_PER_UNIT;
   
-  const roomX = stageCenterX - roomPixelWidth / 2;
-  const roomY = stageCenterY - roomPixelHeight / 2;
+  // Isometric Transform Logic
+  // We want to pivot around the center of the room.
+  const roomCenterX = stageCenterX;
+  const roomCenterY = stageCenterY;
+  
+  // Transform settings
+  // ScaleY 0.5 squashes it vertically.
+  // Rotate 45 degrees.
+  // Since we are transforming the LAYER/GROUP, coordinates inside are still "local".
+  // However, input events (mouse) need to be mapped if we transform the stage context heavily.
+  // Fortunately, Konva handles hit testing through transforms usually.
+  
+  const isoScaleY = 0.6; // Slightly more than 0.5 to look better
+  const isoRotation = 45;
+  
+  const groupScaleX = viewMode === 'iso' ? 1 : 1;
+  const groupScaleY = viewMode === 'iso' ? isoScaleY : 1;
+  const groupRotation = viewMode === 'iso' ? isoRotation : 0;
+  
+  // Adjust position to keep room centered after transform
+  // For simple implementation, we just center the group
+  const groupX = stageCenterX;
+  const groupY = stageCenterY;
+  
+  // The room itself is drawn from (0,0) to (width, height) inside the group.
+  // So we offset the group's content by -width/2, -height/2 to pivot around center.
+  const contentOffsetX = -roomPixelWidth / 2;
+  const contentOffsetY = -roomPixelHeight / 2;
 
   const handleSelect = (id: string) => {
     setLayout((prev) => ({ ...prev, selectedItemId: id }));
@@ -92,6 +128,28 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
 
   const handleDragMove = (id: string, e: any) => {
     const { x, y } = e.target.position();
+    // In local group coordinates (which align with the grid), X/Y are correct relative to the group origin (center).
+    // But we need them relative to the room top-left corner (0,0 of room content).
+    // The items are children of the Group. 
+    // The Group has offset (-width/2, -height/2).
+    // Wait, e.target.position() returns position relative to PARENT (the Group).
+    // Since we didn't change the item's parent structure, x/y are relative to Group origin (0,0 at room center?).
+    // Actually, we placed the Room Floor at (0,0) inside the group previously?
+    // Let's check previous implementation:
+    // <Group x={roomX} y={roomY}> ... items ... </Group>
+    // Here roomX/roomY were top-left.
+    //
+    // NOW: We want to center-pivot.
+    // <Group x={stageCenterX} y={stageCenterY} rotation={...} scaleY={...}>
+    //    <Group x={-roomWidth/2} y={-roomHeight/2}>  <-- Inner container to center content
+    //       <Rect ... room ... />
+    //       <Item ... />
+    //    </Group>
+    // </Group>
+    //
+    // So item.x / item.y are relative to the Inner Group (top-left of room).
+    // e.target.position() should return that.
+    
     const newX = Math.round(x / PIXELS_PER_UNIT);
     const newY = Math.round(y / PIXELS_PER_UNIT);
     
@@ -112,7 +170,6 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
 
   const handleDragEnd = (id: string, e: any) => {
     const { x, y } = e.target.position();
-    // Convert back to units relative to room origin
     const newX = Math.round(x / PIXELS_PER_UNIT);
     const newY = Math.round(y / PIXELS_PER_UNIT);
     
@@ -172,7 +229,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   };
 
   const handleAddItem = (preset: FurniturePreset) => {
-    const newItem = {
+    const newItem: FurnitureItem = {
       id: Date.now().toString(),
       type: preset.type,
       width: preset.width,
@@ -180,6 +237,8 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       x: layout.room.width / 2 - preset.width / 2,
       y: layout.room.height / 2 - preset.height / 2,
       rotation: 0,
+      depth: preset.depth,
+      color: preset.color
     };
     setLayout((prev) => ({
       ...prev,
@@ -198,6 +257,20 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     setTimeout(() => setIsShared(false), 2000);
   };
 
+  const handleSavePhotoItem = (item: FurnitureItem) => {
+    // Center the new photo item
+    item.x = layout.room.width / 2 - item.width / 2;
+    item.y = layout.room.height / 2 - item.height / 2;
+    
+    setLayout((prev) => ({
+        ...prev,
+        items: [...prev.items, item],
+        selectedItemId: item.id
+    }));
+    setIsCameraModalOpen(false);
+    setIsAddPanelOpen(false);
+  };
+
   // Grid generation
   const gridLines = [];
   const gridSize = 12; // 12 inches (1 foot) grid
@@ -208,7 +281,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       <Line
         key={`v-${i}`}
         points={[i * PIXELS_PER_UNIT, 0, i * PIXELS_PER_UNIT, roomPixelHeight]}
-        stroke="#e5e7eb"
+        stroke="rgba(0,0,0,0.05)" // Lighter grid
         strokeWidth={1}
         listening={false}
       />
@@ -220,7 +293,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       <Line
         key={`h-${i}`}
         points={[0, i * PIXELS_PER_UNIT, roomPixelWidth, i * PIXELS_PER_UNIT]}
-        stroke="#e5e7eb"
+        stroke="rgba(0,0,0,0.05)" // Lighter grid
         strokeWidth={1}
         listening={false}
       />
@@ -228,7 +301,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   }
 
   return (
-    <div className="w-full h-screen bg-gray-50 overflow-hidden relative">
+    <div className="w-full h-screen bg-gray-100 overflow-hidden relative">
       <Stage 
         width={windowSize.width} 
         height={windowSize.height}
@@ -236,71 +309,131 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
         onTouchStart={handleDeselect}
       >
         <Layer>
-          {/* Room Group helps us move everything together */}
-          <Group x={roomX} y={roomY}>
-            {/* Room Floor */}
-            <Rect
-              name="room-floor"
-              width={roomPixelWidth}
-              height={roomPixelHeight}
-              fill="white"
-              stroke="#333"
-              strokeWidth={2}
-              shadowBlur={20}
-              shadowColor="rgba(0,0,0,0.1)"
-              shadowOpacity={0.3}
-            />
-            
-            {/* Grid */}
-            {gridLines}
+          {/* Main Transformation Group */}
+          <Group
+             x={groupX}
+             y={groupY}
+             rotation={groupRotation}
+             scaleX={groupScaleX}
+             scaleY={groupScaleY}
+          >
+             {/* Content Centering Group */}
+             <Group x={contentOffsetX} y={contentOffsetY}>
+                
+                {/* Visible Walls (ISO mode only) */}
+                {viewMode === 'iso' && (
+                   <RoomWalls 
+                      width={roomPixelWidth} 
+                      height={roomPixelHeight} 
+                   />
+                )}
 
-            {/* Furniture Items */}
-            {layout.items.map((item) => {
-              const isSelected = layout.selectedItemId === item.id;
-              const isInvalid = invalidItems.has(item.id);
-              
-              return (
+                {/* Wall Borders (Simulated by drawing a larger rect behind) */}
+                {viewMode === '2d' && (
+                  <Rect
+                    x={-10}
+                    y={-10}
+                    width={roomPixelWidth + 20}
+                    height={roomPixelHeight + 20}
+                    fill="#374151" // Dark Gray Walls
+                    cornerRadius={0}
+                    shadowBlur={0}
+                    shadowColor="black"
+                    shadowOpacity={0.2}
+                  />
+                )}
+
+                {/* Room Floor */}
                 <Rect
-                  key={item.id}
-                  x={item.x * PIXELS_PER_UNIT}
-                  y={item.y * PIXELS_PER_UNIT}
-                  width={(item.rotation === 90 || item.rotation === 270 ? item.height : item.width) * PIXELS_PER_UNIT}
-                  height={(item.rotation === 90 || item.rotation === 270 ? item.width : item.height) * PIXELS_PER_UNIT}
-                  fill={isInvalid ? "#ef4444" : (isSelected ? "#60a5fa" : "#3b82f6")} // Red if invalid, light blue if selected, else blue
-                  stroke={isInvalid ? "#b91c1c" : (isSelected ? "#2563eb" : "#1d4ed8")}
-                  strokeWidth={isSelected || isInvalid ? 2 : 1}
-                  cornerRadius={2}
-                  opacity={0.9}
-                  draggable
-                  onDragMove={(e) => handleDragMove(item.id, e)}
-                  onDragEnd={(e) => handleDragEnd(item.id, e)}
-                  onClick={(e) => {
-                    e.cancelBubble = true;
-                    handleSelect(item.id);
-                  }}
-                  onTap={(e) => {
-                     e.cancelBubble = true;
-                     handleSelect(item.id);
-                  }}
+                  name="room-floor"
+                  width={roomPixelWidth}
+                  height={roomPixelHeight}
+                  fill="#d6d3d1" // Warm Grey / Beige Concrete
                 />
-              );
-            })}
+                
+                {/* Grid */}
+                {gridLines}
+
+                {/* Furniture Items */}
+                {layout.items.map((item) => {
+                  const isSelected = layout.selectedItemId === item.id;
+                  const isInvalid = invalidItems.has(item.id);
+                  
+                  const itemProps = {
+                      x: item.x * PIXELS_PER_UNIT,
+                      y: item.y * PIXELS_PER_UNIT,
+                      width: (item.rotation === 90 || item.rotation === 270 ? item.height : item.width) * PIXELS_PER_UNIT,
+                      height: (item.rotation === 90 || item.rotation === 270 ? item.width : item.height) * PIXELS_PER_UNIT,
+                      depth: (item.depth || 20), // visual height
+                      color: item.color || "#3b82f6",
+                      imageUrl: item.imageUrl,
+                      rotation: 0, 
+                      isIsoMode: viewMode === 'iso', // Pass view mode to item
+                      
+                      isSelected,
+                      isInvalid,
+                      draggable: true,
+                      onDragMove: (e: any) => handleDragMove(item.id, e),
+                      onDragEnd: (e: any) => handleDragEnd(item.id, e),
+                      onClick: (e: any) => {
+                        e.cancelBubble = true;
+                        handleSelect(item.id);
+                      },
+                      onTap: (e: any) => {
+                         e.cancelBubble = true;
+                         handleSelect(item.id);
+                      }
+                  };
+                  
+                  return (
+                    <ExtrudedRect
+                       key={item.id}
+                       {...itemProps}
+                    />
+                  );
+                })}
+             </Group>
           </Group>
         </Layer>
       </Stage>
       
       {/* Overlay UI for info */}
-      <div className="absolute top-4 left-4 bg-white p-4 rounded shadow-md z-10 pointer-events-none flex gap-4">
+      <div className="absolute top-4 left-4 bg-white/90 backdrop-blur p-4 rounded-xl shadow-sm border border-gray-200 z-10 pointer-events-none flex gap-4">
         <div>
-           <h1 className="font-bold text-lg">Packer</h1>
-           <p className="text-sm text-gray-600">Room: {layout.room.width}" x {layout.room.height}"</p>
+           <h1 className="font-bold text-lg text-gray-800">Packer</h1>
+           <p className="text-sm text-gray-500">Room: {layout.room.width}" x {layout.room.height}"</p>
         </div>
+      </div>
+      
+      {/* View Mode Toggle */}
+      <div className="absolute bottom-8 left-8 bg-white/90 backdrop-blur p-1 rounded-lg shadow-xl border border-gray-200 z-10 flex">
+         <button
+           onClick={() => setViewMode('2d')}
+           className={`p-3 rounded-md flex items-center gap-2 font-semibold text-sm transition-all ${viewMode === '2d' ? 'bg-indigo-100 text-indigo-700 shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
+         >
+           <LayoutGrid size={20} />
+           2D Top
+         </button>
+         <button
+           onClick={() => setViewMode('iso')}
+           className={`p-3 rounded-md flex items-center gap-2 font-semibold text-sm transition-all ${viewMode === 'iso' ? 'bg-indigo-100 text-indigo-700 shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
+         >
+           <Box size={20} />
+           3D View
+         </button>
+         <button
+           onClick={() => setIsThreeSceneOpen(true)}
+           className="p-3 rounded-md flex items-center gap-2 font-semibold text-sm transition-all text-gray-500 hover:bg-gray-100 hover:text-indigo-600"
+         >
+           <Box size={20} />
+           True 3D
+         </button>
       </div>
 
        <div className="absolute top-4 right-4 flex gap-2 z-10">
           <button 
              onClick={handleShare}
-             className="bg-white p-2 rounded shadow text-gray-700 hover:text-blue-600 border border-gray-200"
+             className="bg-white p-3 rounded-full shadow-sm text-gray-700 hover:text-blue-600 hover:bg-blue-50 transition-all border border-gray-200"
              title="Share Layout"
            >
              <Share2 size={20} />
@@ -312,14 +445,14 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
            )}
           <button 
              onClick={handleReset}
-             className="bg-white p-2 rounded shadow text-gray-700 hover:text-red-600 border border-gray-200"
+             className="bg-white p-3 rounded-full shadow-sm text-gray-700 hover:text-red-600 hover:bg-red-50 transition-all border border-gray-200"
              title="Reset Layout"
            >
              <RotateCcw size={20} />
            </button>
            <button 
              onClick={() => setIsAddPanelOpen(true)}
-             className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 font-medium flex items-center gap-2"
+             className="bg-gray-900 text-white px-6 py-3 rounded-full shadow-lg hover:bg-black transition-all font-medium flex items-center gap-2 transform hover:scale-105 active:scale-95"
            >
              <Plus size={20} />
              Add Furniture
@@ -328,63 +461,101 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       
       {/* Validation Message */}
       {invalidItems.size > 0 && (
-        <div className="absolute top-20 left-1/2 transform -translate-x-1/2 bg-red-100 text-red-800 px-4 py-2 rounded shadow-md z-10 border border-red-200 font-medium">
+        <div className="absolute top-24 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-6 py-2 rounded-full shadow-lg z-10 font-bold animate-pulse">
           Out of bounds or colliding!
         </div>
       )}
 
       {/* Selected Item Controls */}
       {layout.selectedItemId && (
-        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white px-6 py-3 rounded-full shadow-lg z-10 flex gap-4 items-center border border-gray-200">
+        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur px-8 py-4 rounded-2xl shadow-xl z-10 flex gap-6 items-center border border-gray-200">
            <button 
              onClick={handleRotate}
-             className="flex flex-col items-center gap-1 text-gray-700 hover:text-blue-600 transition-colors"
+             className="flex flex-col items-center gap-1 text-gray-600 hover:text-blue-600 transition-colors"
            >
-             <RotateCw size={20} />
-             <span className="text-xs font-medium">Rotate</span>
+             <div className="p-2 bg-gray-100 rounded-full group-hover:bg-blue-100 transition-colors">
+                <RotateCw size={20} />
+             </div>
+             <span className="text-xs font-semibold">Rotate</span>
            </button>
-           <div className="w-px h-8 bg-gray-200 mx-2"></div>
+           <div className="w-px h-10 bg-gray-200"></div>
            <button 
              onClick={handleDuplicate}
-             className="flex flex-col items-center gap-1 text-gray-700 hover:text-blue-600 transition-colors"
+             className="flex flex-col items-center gap-1 text-gray-600 hover:text-blue-600 transition-colors"
            >
-             <Copy size={20} />
-             <span className="text-xs font-medium">Clone</span>
+             <div className="p-2 bg-gray-100 rounded-full group-hover:bg-blue-100 transition-colors">
+                <Copy size={20} />
+             </div>
+             <span className="text-xs font-semibold">Clone</span>
            </button>
-           <div className="w-px h-8 bg-gray-200 mx-2"></div>
+           <div className="w-px h-10 bg-gray-200"></div>
            <button 
              onClick={handleDelete}
-             className="flex flex-col items-center gap-1 text-gray-700 hover:text-red-600 transition-colors"
+             className="flex flex-col items-center gap-1 text-gray-600 hover:text-red-600 transition-colors"
            >
-             <Trash2 size={20} />
-             <span className="text-xs font-medium">Delete</span>
+             <div className="p-2 bg-gray-100 rounded-full group-hover:bg-red-100 transition-colors">
+                <Trash2 size={20} />
+             </div>
+             <span className="text-xs font-semibold">Delete</span>
            </button>
         </div>
       )}
 
       {/* Add Furniture Panel */}
       {isAddPanelOpen && (
-        <div className="absolute top-0 right-0 h-full w-80 bg-white shadow-xl z-20 overflow-y-auto border-l border-gray-200 p-6">
-           <div className="flex justify-between items-center mb-6">
-             <h2 className="text-xl font-bold">Add Furniture</h2>
-             <button onClick={() => setIsAddPanelOpen(false)} className="text-gray-500 hover:text-gray-800">
-               <X size={24} />
+        <div className="absolute top-0 right-0 h-full w-96 bg-white shadow-2xl z-20 overflow-y-auto border-l border-gray-100 p-8">
+           <div className="flex justify-between items-center mb-8">
+             <h2 className="text-2xl font-extrabold text-gray-900">Add Furniture</h2>
+             <button onClick={() => setIsAddPanelOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+               <X size={24} className="text-gray-500" />
              </button>
            </div>
            
-           <div className="grid grid-cols-1 gap-4">
+           <div className="mb-8">
+             <button 
+               onClick={() => setIsCameraModalOpen(true)}
+               className="w-full flex items-center justify-center gap-3 bg-gradient-to-br from-indigo-500 to-purple-600 text-white p-5 rounded-xl font-bold hover:shadow-lg transition-all transform hover:-translate-y-1"
+             >
+               <Camera size={24} />
+               <span>Create from Photo</span>
+             </button>
+           </div>
+           
+           <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Presets</h3>
+           <div className="space-y-3">
              {FURNITURE_PRESETS.map(preset => (
                <button
                  key={preset.id}
                  onClick={() => handleAddItem(preset)}
-                 className="flex flex-col items-start p-4 border border-gray-200 rounded hover:border-blue-500 hover:bg-blue-50 transition-all text-left"
+                 className="w-full flex items-center p-4 border border-gray-200 rounded-xl hover:border-indigo-500 hover:shadow-md hover:bg-indigo-50 transition-all text-left group bg-white"
                >
-                 <span className="font-bold text-gray-800">{preset.label}</span>
-                 <span className="text-sm text-gray-500">{preset.width}" x {preset.height}"</span>
+                 <div className="w-10 h-10 rounded bg-gray-100 mr-4 flex items-center justify-center text-gray-400 group-hover:bg-white group-hover:text-indigo-500">
+                    <div style={{ width: '60%', height: '60%', backgroundColor: preset.color || '#cbd5e1', borderRadius: 2 }}></div>
+                 </div>
+                 <div>
+                    <span className="block font-bold text-gray-800 group-hover:text-indigo-900">{preset.label}</span>
+                    <span className="text-xs text-gray-500 font-medium">{preset.width}" x {preset.height}"</span>
+                 </div>
                </button>
              ))}
            </div>
         </div>
+      )}
+
+      {/* Camera Modal */}
+      {isCameraModalOpen && (
+        <ImageModelCreator 
+            onClose={() => setIsCameraModalOpen(false)}
+            onSave={handleSavePhotoItem}
+        />
+      )}
+
+      {/* True 3D Overlay */}
+      {isThreeSceneOpen && (
+        <ThreeScene 
+            layout={layout}
+            onClose={() => setIsThreeSceneOpen(false)}
+        />
       )}
     </div>
   );
