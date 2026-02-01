@@ -11,6 +11,7 @@ const LayoutEditor = dynamic(() => import("../../components/LayoutEditor"), {
 const defaultLayout: LayoutState = {
   room: { width: 120, height: 144 }, // Default 10x12
   items: [],
+  attachments: [],
   selectedItemId: null,
 };
 

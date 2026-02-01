@@ -11,7 +11,8 @@ import ImageModelCreator from "./ImageModelCreator";
 import URLImage from "./URLImage";
 import ExtrudedRect from "./ExtrudedRect";
 import RoomWalls from "./RoomWalls";
-import ThreeScene from "./ThreeScene"; // Import the new component
+import ThreeScene from "./ThreeScene";
+import IsoScene from "./IsoScene";
 
 interface LayoutEditorProps {
   initialState: LayoutState;
@@ -25,6 +26,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   const [isShared, setIsShared] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [isThreeSceneOpen, setIsThreeSceneOpen] = useState(false); // New state for 3D overlay
+  const [isoAngle, setIsoAngle] = useState<0 | 90 | 180 | 270>(0); // New angle state
   
   // View Mode: '2d' or 'iso'
   const [viewMode, setViewMode] = useState<'2d' | 'iso'>('iso');
@@ -105,16 +107,24 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   // Adjust position to keep room centered after transform
   // For simple implementation, we just center the group
   const groupX = stageCenterX;
+
   const groupY = stageCenterY;
-  
-  // The room itself is drawn from (0,0) to (width, height) inside the group.
-  // So we offset the group's content by -width/2, -height/2 to pivot around center.
+
   const contentOffsetX = -roomPixelWidth / 2;
   const contentOffsetY = -roomPixelHeight / 2;
 
-  const handleSelect = (id: string) => {
+  const handleSelect = (id: string | null) => {
+
     setLayout((prev) => ({ ...prev, selectedItemId: id }));
   };
+
+  const handleRotateView = () => {
+    setIsoAngle(prev => {
+        const next = (prev + 90) % 360;
+        return next as 0 | 90 | 180 | 270;
+    });
+  };
+
 
   const handleDeselect = (e: any) => {
     // deselect when clicking on empty area of the room or stage
@@ -201,6 +211,41 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       ...prev,
       items: prev.items.filter((item) => item.id !== prev.selectedItemId),
       selectedItemId: null,
+    }));
+  };
+
+  // Attachment Handlers
+  const handleAddAttachment = (attachment: any) => {
+    setLayout((prev) => ({
+      ...prev,
+      attachments: [...(prev.attachments || []), attachment],
+      selectedAttachmentId: attachment.id,
+      selectedItemId: null // Deselect furniture
+    }));
+  };
+
+  const handleUpdateAttachment = (id: string, updates: any) => {
+    setLayout((prev) => ({
+      ...prev,
+      attachments: (prev.attachments || []).map((att) =>
+        att.id === id ? { ...att, ...updates } : att
+      ),
+    }));
+  };
+
+  const handleDeleteAttachment = (id: string) => {
+    setLayout((prev) => ({
+      ...prev,
+      attachments: (prev.attachments || []).filter((att) => att.id !== id),
+      selectedAttachmentId: null,
+    }));
+  };
+
+  const handleSelectAttachment = (id: string | null) => {
+    setLayout((prev) => ({
+        ...prev,
+        selectedAttachmentId: id,
+        selectedItemId: id ? null : prev.selectedItemId
     }));
   };
 
@@ -309,91 +354,96 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
         onTouchStart={handleDeselect}
       >
         <Layer>
-          {/* Main Transformation Group */}
-          <Group
-             x={groupX}
-             y={groupY}
-             rotation={groupRotation}
-             scaleX={groupScaleX}
-             scaleY={groupScaleY}
-          >
-             {/* Content Centering Group */}
-             <Group x={contentOffsetX} y={contentOffsetY}>
-                
-                {/* Visible Walls (ISO mode only) */}
-                {viewMode === 'iso' && (
-                   <RoomWalls 
-                      width={roomPixelWidth} 
-                      height={roomPixelHeight} 
-                   />
-                )}
-
-                {/* Wall Borders (Simulated by drawing a larger rect behind) */}
-                {viewMode === '2d' && (
-                  <Rect
-                    x={-10}
-                    y={-10}
-                    width={roomPixelWidth + 20}
-                    height={roomPixelHeight + 20}
-                    fill="#374151" // Dark Gray Walls
-                    cornerRadius={0}
-                    shadowBlur={0}
-                    shadowColor="black"
-                    shadowOpacity={0.2}
-                  />
-                )}
-
-                {/* Room Floor */}
-                <Rect
-                  name="room-floor"
-                  width={roomPixelWidth}
-                  height={roomPixelHeight}
-                  fill="#d6d3d1" // Warm Grey / Beige Concrete
-                />
-                
-                {/* Grid */}
-                {gridLines}
-
-                {/* Furniture Items */}
-                {layout.items.map((item) => {
-                  const isSelected = layout.selectedItemId === item.id;
-                  const isInvalid = invalidItems.has(item.id);
-                  
-                  const itemProps = {
-                      x: item.x * PIXELS_PER_UNIT,
-                      y: item.y * PIXELS_PER_UNIT,
-                      width: (item.rotation === 90 || item.rotation === 270 ? item.height : item.width) * PIXELS_PER_UNIT,
-                      height: (item.rotation === 90 || item.rotation === 270 ? item.width : item.height) * PIXELS_PER_UNIT,
-                      depth: (item.depth || 20), // visual height
-                      color: item.color || "#3b82f6",
-                      imageUrl: item.imageUrl,
-                      rotation: 0, 
-                      isIsoMode: viewMode === 'iso', // Pass view mode to item
-                      
-                      isSelected,
-                      isInvalid,
-                      draggable: true,
-                      onDragMove: (e: any) => handleDragMove(item.id, e),
-                      onDragEnd: (e: any) => handleDragEnd(item.id, e),
-                      onClick: (e: any) => {
-                        e.cancelBubble = true;
-                        handleSelect(item.id);
-                      },
-                      onTap: (e: any) => {
-                         e.cancelBubble = true;
-                         handleSelect(item.id);
-                      }
-                  };
-                  
-                  return (
-                    <ExtrudedRect
-                       key={item.id}
-                       {...itemProps}
+            {viewMode === 'iso' ? (
+                 <Group x={stageCenterX} y={stageCenterY}>
+                    <IsoScene 
+                        layout={layout} 
+                        viewAngle={isoAngle} 
+                        pixelsPerUnit={PIXELS_PER_UNIT * 0.5} 
+                        invalidItems={invalidItems}
+                        onSelectItem={handleSelect}
+                        onItemMove={(id, x, y) => {
+                             setLayout(prev => ({
+                                ...prev,
+                                items: prev.items.map(i => i.id === id ? { ...i, x, y } : i)
+                             }));
+                        }}
+                        onSelectAttachment={handleSelectAttachment}
+                        onUpdateAttachment={handleUpdateAttachment}
                     />
-                  );
-                })}
-             </Group>
-          </Group>
+                 </Group>
+            ) : (
+              <Group
+                 x={groupX}
+                 y={groupY}
+              >
+                 <Group x={contentOffsetX} y={contentOffsetY}>
+    
+                    {/* Wall Borders (Simulated by drawing a larger rect behind) */}
+                      <Rect
+                        x={-10}
+                        y={-10}
+                        width={roomPixelWidth + 20}
+                        height={roomPixelHeight + 20}
+                        fill="#374151" // Dark Gray Walls
+                        cornerRadius={0}
+                        shadowBlur={0}
+                        shadowColor="black"
+                        shadowOpacity={0.2}
+                      />
+    
+                    {/* Room Floor */}
+                    <Rect
+                      name="room-floor"
+                      width={roomPixelWidth}
+                      height={roomPixelHeight}
+                      fill="#d6d3d1" // Warm Grey / Beige Concrete
+                    />
+                    
+                    {/* Grid */}
+                    {gridLines}
+    
+                    {/* Furniture Items */}
+                    {layout.items.map((item) => {
+                      const isSelected = layout.selectedItemId === item.id;
+                      const isInvalid = invalidItems.has(item.id);
+                      
+                      const itemProps = {
+                          x: item.x * PIXELS_PER_UNIT,
+                          y: item.y * PIXELS_PER_UNIT,
+                          width: (item.rotation === 90 || item.rotation === 270 ? item.height : item.width) * PIXELS_PER_UNIT,
+                          height: (item.rotation === 90 || item.rotation === 270 ? item.width : item.height) * PIXELS_PER_UNIT,
+                          depth: (item.depth || 20), // visual height
+                          color: item.color || "#3b82f6",
+                          imageUrl: item.imageUrl,
+                          rotation: 0, 
+                          isIsoMode: false,
+                          
+                          isSelected,
+                          isInvalid,
+                          draggable: true,
+                          onDragMove: (e: any) => handleDragMove(item.id, e),
+                          onDragEnd: (e: any) => handleDragEnd(item.id, e),
+                          onClick: (e: any) => {
+                            e.cancelBubble = true;
+                            handleSelect(item.id);
+                          },
+                          onTap: (e: any) => {
+                             e.cancelBubble = true;
+                             handleSelect(item.id);
+                          }
+                      };
+                      
+                      return (
+                        <ExtrudedRect
+                           key={item.id}
+                           {...itemProps}
+                        />
+                      );
+                    })}
+                 </Group>
+              </Group>
+            )}
         </Layer>
       </Stage>
       
@@ -428,6 +478,16 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
            <Box size={20} />
            True 3D
          </button>
+         
+         {viewMode === 'iso' && (
+             <button
+                onClick={handleRotateView}
+                className="ml-2 p-3 rounded-md flex items-center gap-2 font-semibold text-sm transition-all text-gray-500 hover:bg-gray-100 hover:text-indigo-600"
+                title="Rotate View 90°"
+             >
+                <RotateCw size={20} />
+             </button>
+         )}
       </div>
 
        <div className="absolute top-4 right-4 flex gap-2 z-10">
@@ -555,6 +615,10 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
         <ThreeScene 
             layout={layout}
             onClose={() => setIsThreeSceneOpen(false)}
+            onAddAttachment={handleAddAttachment}
+            onUpdateAttachment={handleUpdateAttachment}
+            onDeleteAttachment={handleDeleteAttachment}
+            onSelectAttachment={handleSelectAttachment}
         />
       )}
     </div>

@@ -16,9 +16,25 @@ export interface FurnitureItem {
   color?: string; // Hex color
 }
 
+export type WallSide = 'front' | 'back' | 'left' | 'right';
+export type AttachmentType = 'window' | 'door' | 'shelf';
+
+export interface WallAttachment {
+  id: string;
+  type: AttachmentType;
+  side: WallSide;
+  x: number; // Horizontal position along the wall (inches)
+  y: number; // Vertical position from floor (inches)
+  width: number; // inches
+  height: number; // inches
+  offsetFromWall?: number; // For shelves (sticking out)
+}
+
 export interface LayoutState {
   room: Room;
   items: FurnitureItem[];
+  attachments: WallAttachment[];
   selectedItemId: string | null;
+  selectedAttachmentId?: string | null;
 }
 

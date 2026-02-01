@@ -13,7 +13,8 @@ export function serializeLayout(layout: LayoutState): string {
         x: item.x,
         y: item.y,
         rotation: item.rotation
-    }))
+    })),
+    attachments: layout.attachments
   };
   return btoa(JSON.stringify(data));
 }
@@ -29,6 +30,7 @@ export function deserializeLayout(encoded: string): LayoutState | null {
     return {
         room: data.room,
         items: data.items,
+        attachments: data.attachments || [],
         selectedItemId: null
     };
   } catch (e) {
