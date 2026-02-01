@@ -29,3 +29,19 @@ export const FURNITURE_PRESETS: FurniturePreset[] = [
   { id: "plant", label: "Plant", type: "plant", width: 18, height: 18, depth: 24, color: "#94a3b8" },
 ];
 
+export interface FloorPreset {
+  id: string;
+  label: string;
+  color: string;
+}
+
+export const FLOOR_PRESETS: FloorPreset[] = [
+  { id: "concrete", label: "Concrete", color: "#d6d3d1" },
+  { id: "light-wood", label: "Light Wood", color: "#d4c4a8" },
+  { id: "oak-wood", label: "Oak Wood", color: "#a68b6c" },
+  { id: "dark-wood", label: "Dark Wood", color: "#5d4037" },
+  { id: "white-marble", label: "Marble", color: "#f5f5f5" },
+  { id: "blue-tile", label: "Blue Tile", color: "#93c5fd" },
+  { id: "dark-tile", label: "Dark Tile", color: "#374151" },
+];
+

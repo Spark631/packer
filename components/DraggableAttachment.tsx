@@ -94,33 +94,74 @@ export const DraggableAttachment: React.FC<DraggableAttachmentProps> = ({
 
     // Calculate intersection point of the ray with the plane
     const intersect = new Vector3();
-    raycaster.ray.intersectPlane(dragPlane.current, intersect);
+    const result = raycaster.ray.intersectPlane(dragPlane.current, intersect);
     
-    if (intersect) {
+    if (result) {
          // Calculate offset: where we clicked vs object world center
         dragOffset.current.subVectors(planePoint, intersect);
     }
   };
 
   const handlePointerMove = (e: any) => {
-    if (!isDragging) return;
+    if (!isDragging || !meshRef.current) return;
     
     const intersect = new Vector3();
-    raycaster.ray.intersectPlane(dragPlane.current, intersect);
+    const result = raycaster.ray.intersectPlane(dragPlane.current, intersect);
     
-    if (intersect) {
+    if (result) {
         // New world position = intersection + offset
         const newWorldPos = intersect.add(dragOffset.current);
         
-        // Convert World Position -> Wall Position (x, y)
-        let newWallX = 0;
-        let newWallY = newWorldPos.y - height / 2;
+        // Convert to local space to handle room centering/offsets
+        const localPos = meshRef.current.parent?.worldToLocal(newWorldPos.clone()) || newWorldPos;
+
+        // The parent group has rotation already applied if side=left/right
+        // However, our DraggableAttachment is a Group positioned at `position`
+        // We need to calculate what the new 'x' and 'y' (wall coordinates) would be
+        // to result in this local position.
+
+        // DraggableAttachment structure:
+        // Group (positioned at x,y relative to wall origin) -> Mesh (center at 0,0,0)
+        // Actually, looking at useMemo above:
+        // back: [x + width/2, y + height/2, ...]
+        // So localPos.x corresponds to x + width/2
         
+        // Let's rely on the fact that we know the wall orientation logic
+        // But since we converted to local space of the parent (DynamicRoomWalls group?),
+        // we need to know what the parent is.
+        // In ThreeScene.tsx, DynamicRoomWalls renders DraggableAttachment inside a <group>
+        // which represents the entire room (centered).
+        // BUT DraggableAttachment renders a <group> then a <mesh>.
+        // meshRef is on the <group> (Wait, no, meshRef is on the <group> in line 153? No, line 153 says ref={meshRef})
+        
+        // Wait, the code says:
+        // <group ref={meshRef} position={position} ...>
+        //   <mesh ...>
+        // So meshRef points to the wrapper group which is positioned at the attachment's location.
+        // If we want to find the new "x" and "y" for the attachment props, we need to know where
+        // the mouse is relative to the *Wall's* origin.
+        
+        // The parent of this <group> is the Room group in ThreeScene.tsx:
+        // <group position={[-layout.room.width / 2, 0, -layout.room.height / 2]}> ... </group>
+        
+        // So if we convert worldPos to that Room Group's local space, we get coordinates relative to the room corner (0,0,0).
+        // Let's assume meshRef.current.parent is that Room Group.
+        
+        // Wall coordinate logic (from useMemo):
+        // Back (Z=0): pos.x = x + width/2
+        // Front (Z=H): pos.x = x + width/2
+        // Left (X=0): pos.z = x + width/2
+        // Right (X=W): pos.z = x + width/2
+        // Y is always y + height/2
+        
+        let newWallX = 0;
+        let newWallY = localPos.y - height / 2;
+
         if (side === "back" || side === "front") {
-            newWallX = newWorldPos.x - width / 2;
+            newWallX = localPos.x - width / 2;
         } else {
             // Left/Right walls run along Z
-            newWallX = newWorldPos.z - width / 2;
+            newWallX = localPos.z - width / 2;
         }
 
         // Clamp to wall boundaries
@@ -128,7 +169,13 @@ export const DraggableAttachment: React.FC<DraggableAttachmentProps> = ({
         
         if (newWallX < 0) newWallX = 0;
         if (newWallX > wallLimit - width) newWallX = wallLimit - width;
-        if (newWallY < 0) newWallY = 0;
+        
+        // Door constraint: lock Y to 0
+        if (type === 'door') {
+             newWallY = 0;
+        } else {
+             if (newWallY < 0) newWallY = 0;
+        }
 
         // Perform update
         onUpdate(attachment.id, { x: newWallX, y: newWallY });

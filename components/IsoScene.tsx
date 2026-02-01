@@ -119,29 +119,68 @@ function getWallCoordinates(
 
 // --- Components ---
 
-const IsoFloor: React.FC<{ w: number; h: number; ppu: number }> = ({ w, h, ppu }) => {
+const IsoFloor: React.FC<{ w: number; h: number; ppu: number; color?: string; thickness?: number }> = ({ w, h, ppu, color = "#e5e5e5", thickness = 4 }) => {
   // 4 corners of the floor
   const c1 = toScreen(0, 0, 0, ppu);
   const c2 = toScreen(w, 0, 0, ppu);
   const c3 = toScreen(w, h, 0, ppu);
   const c4 = toScreen(0, h, 0, ppu);
 
+  // Bottom corners (shifted down by thickness)
+  // In Iso view, "down" means increasing Y in screen coords.
+  // Z axis points "up". So z = -thickness.
+  // toScreen handles Z.
+  const b2 = toScreen(w, 0, -thickness, ppu);
+  const b3 = toScreen(w, h, -thickness, ppu);
+  const b4 = toScreen(0, h, -thickness, ppu);
+
   return (
-    <Shape
-      sceneFunc={(ctx, shape) => {
-        ctx.beginPath();
-        ctx.moveTo(c1.x, c1.y);
-        ctx.lineTo(c2.x, c2.y);
-        ctx.lineTo(c3.x, c3.y);
-        ctx.lineTo(c4.x, c4.y);
-        ctx.closePath();
-        ctx.fillStrokeShape(shape);
-      }}
-      fill="#e5e5e5"
-      stroke="#d4d4d4"
-      strokeWidth={1}
-      listening={false} // Click-through to background for deselection
-    />
+    <Group>
+        {/* Right Face (c2-c3-b3-b2) - Visible from default angle */}
+        <Shape
+            sceneFunc={(ctx, shape) => {
+                ctx.beginPath();
+                ctx.moveTo(c2.x, c2.y);
+                ctx.lineTo(c3.x, c3.y);
+                ctx.lineTo(b3.x, b3.y);
+                ctx.lineTo(b2.x, b2.y);
+                ctx.closePath();
+                ctx.fillStrokeShape(shape);
+            }}
+            fill="#a3a3a3" // Darker side
+            listening={false}
+        />
+        {/* Left Face (c3-c4-b4-b3) - Visible from default angle */}
+        <Shape
+            sceneFunc={(ctx, shape) => {
+                ctx.beginPath();
+                ctx.moveTo(c3.x, c3.y);
+                ctx.lineTo(c4.x, c4.y);
+                ctx.lineTo(b4.x, b4.y);
+                ctx.lineTo(b3.x, b3.y);
+                ctx.closePath();
+                ctx.fillStrokeShape(shape);
+            }}
+            fill="#d4d4d4" // Medium side
+            listening={false}
+        />
+        {/* Top Face */}
+        <Shape
+          sceneFunc={(ctx, shape) => {
+            ctx.beginPath();
+            ctx.moveTo(c1.x, c1.y);
+            ctx.lineTo(c2.x, c2.y);
+            ctx.lineTo(c3.x, c3.y);
+            ctx.lineTo(c4.x, c4.y);
+            ctx.closePath();
+            ctx.fillStrokeShape(shape);
+          }}
+          fill={color}
+          stroke="#d4d4d4"
+          strokeWidth={1}
+          listening={false} // Click-through to background for deselection
+        />
+    </Group>
   );
 };
 
@@ -444,7 +483,19 @@ const IsoWallAttachment: React.FC<{
 }> = ({ attachment, viewAngle, roomW, roomH, ppu, selected, isDimmed, onSelect, onUpdate }) => {
     const [isDragging, setIsDragging] = React.useState(false);
 
-    const handleDragStart = () => {
+    const dragBoundFunc = (pos: { x: number; y: number }) => {
+        // Since we don't track startAbsPos for attachments (yet), we can't do delta logic easily.
+        // But dragging attachments in Iso is tricky because the movement axis is constrained to the wall.
+        // For now, let's just allow free movement and rely on handleDragEnd to snap, 
+        // OR implement a constrained drag.
+        
+        // Better: Constrain to the screen-projected axis of the wall?
+        // That's hard because "x" along the wall maps to a diagonal on screen.
+        
+        return pos;
+    };
+
+    const handleDragStart = (e: any) => {
         setIsDragging(true);
         onSelect(attachment.id);
     };
@@ -462,21 +513,76 @@ const IsoWallAttachment: React.FC<{
 
         let dWallX = 0;
         let dWallY = 0;
-
-        // Map grid delta back to wall-relative delta based on side
-        // This is complex - simplified: just use horizontal component
-        if (attachment.side === 'front' || attachment.side === 'back') {
-            dWallX = dGx; // X movement along wall
-            dWallY = attachment.type === 'door' ? 0 : -sy / ppu; // Y only for non-doors
+        
+        // We need to map the screen delta (dGx, dGy) which is in "Rotated Grid Space"
+        // back to the "Wall Space" (delta along the wall).
+        
+        // Wall orientation in Rotated Space:
+        // Front/Back walls (in original space) might be Left/Right in rotated space.
+        
+        // Let's look at getWallCoordinates logic.
+        // We need the Inverse of `rotatePoint`.
+        // Actually, we can just look at how the wall runs in the current view.
+        
+        // Rotated Wall vectors:
+        // We need to know if the wall runs along X or Y in the rotated grid.
+        // Let's re-calculate world coords for (0,0) and (1,0) on the wall to find the unit vector.
+        
+        const origin = getWallCoordinates(attachment.side, 0, 0, viewAngle, roomW, roomH);
+        const unitX = getWallCoordinates(attachment.side, 1, 0, viewAngle, roomW, roomH); // +1 inch along wall
+        
+        // Vector in Rotated Grid Space (World coordinates after rotation)
+        const dx = unitX.worldX - origin.worldX;
+        const dy = unitX.worldY - origin.worldY;
+        
+        // Now project dGx, dGy onto this vector (dx, dy).
+        // Since (dx, dy) should be unit-like (length 1 or -1 along one axis), it's simple.
+        
+        if (Math.abs(dx) > 0.5) {
+             // Wall runs along X in rotated space
+             // dx is 1 or -1
+             dWallX = dGx * dx; // If dx is -1, movement is inverted
         } else {
-            dWallX = dGy;
-            dWallY = attachment.type === 'door' ? 0 : -sy / ppu;
+             // Wall runs along Y in rotated space
+             dWallX = dGy * dy;
         }
+        
+        // Vertical movement (Y axis) is independent of rotation (Z is always up)
+        // Screen Y has a Z component: ScreenY = ... - Z
+        // In our inverse projection: 
+        // We assumed Z=0 when calculating dGx, dGy. 
+        // But actually, dragging up/down on screen affects both.
+        // Let's simplfy: The user drags the object on screen.
+        // We decomposed it into dGx, dGy assuming Z=0.
+        // If the wall is "flat" to the camera (e.g. Left Wall in default view), 
+        // moving mouse Y changes both Grid Y and Z visually? 
+        // No, `toScreen` says: sy = (x+y)/2 - z.
+        // If we want to change Z (wall height) without changing X/Y (wall pos),
+        // we need to know how dragging affects Z.
+        
+        // This is ambiguous in 2D input. 
+        // Let's assume:
+        // - X movement on screen -> Wall X
+        // - Y movement on screen -> Wall Y (Height)
+        // BUT for Iso, X and Y are coupled.
+        
+        // Current implementation:
+        // dWallY = -sy / ppu;
+        // This assumes dragging UP (negative sy) increases Z.
+        // toScreen: sy decreases by 1 * ppu for every +1 Z.
+        // So this is correct.
+        
+        dWallY = attachment.type === 'door' ? 0 : -sy / ppu;
 
         const newX = Math.max(0, Math.min(attachment.side === 'left' || attachment.side === 'right' ? roomH : roomW, attachment.x + dWallX));
-        const newY = attachment.type === 'door' ? 0 : Math.max(0, Math.min(96, attachment.y + dWallY));
+        
+        // Fix boundary check: use attachment width
+        const limit = (attachment.side === 'left' || attachment.side === 'right') ? roomH : roomW;
+        const finalX = Math.max(0, Math.min(limit - attachment.width, newX));
+        
+        const newY = attachment.type === 'door' ? 0 : Math.max(0, Math.min(96 - attachment.height, attachment.y + dWallY));
 
-        onUpdate(attachment.id, { x: newX, y: newY });
+        onUpdate(attachment.id, { x: finalX, y: newY });
     };
 
     // Get 3D position
@@ -674,23 +780,69 @@ const IsoScene: React.FC<IsoSceneProps> = ({
     // But wait, standard painter's Algo for iso:
     // Sort by (GridX + GridY). Smallest sum (furthest back) draws first.
     
-    const sortedItems = useMemo(() => {
-        return [...layout.items].sort((a, b) => {
-            // Must use rotated coordinates for sorting!
-            const ra = rotatePoint(a.x, a.y, viewAngle, layout.room.width, layout.room.height);
-            const rb = rotatePoint(b.x, b.y, viewAngle, layout.room.width, layout.room.height);
-            return (ra.x + ra.y) - (rb.x + rb.y);
+    const sortedRenderables = useMemo(() => {
+        // Create a unified list of renderable items (furniture + attachments)
+        const renderableItems = [
+            ...layout.items.map(item => ({ type: 'furniture' as const, data: item })),
+            ...(layout.attachments || []).map(att => ({ type: 'attachment' as const, data: att }))
+        ];
+
+        return renderableItems.sort((a, b) => {
+            let depthA = 0;
+            let depthB = 0;
+
+            // Calculate depth for Item A
+            if (a.type === 'furniture') {
+                const item = a.data as FurnitureItem;
+                const ra = rotatePoint(item.x, item.y, viewAngle, layout.room.width, layout.room.height);
+                depthA = ra.x + ra.y;
+            } else {
+                const att = a.data as WallAttachment;
+                const coords = getWallCoordinates(att.side, att.x, att.y, viewAngle, layout.room.width, layout.room.height);
+                depthA = coords.worldX + coords.worldY;
+            }
+
+            // Calculate depth for Item B
+            if (b.type === 'furniture') {
+                const item = b.data as FurnitureItem;
+                const rb = rotatePoint(item.x, item.y, viewAngle, layout.room.width, layout.room.height);
+                depthB = rb.x + rb.y;
+            } else {
+                const att = b.data as WallAttachment;
+                const coords = getWallCoordinates(att.side, att.x, att.y, viewAngle, layout.room.width, layout.room.height);
+                depthB = coords.worldX + coords.worldY;
+            }
+
+            // Primary sort: position on floor (x + y)
+            const diff = depthA - depthB;
+            
+            // Secondary sort: Z-height (if positions are very close)
+            // This handles stacking (e.g. rug under table, shelf above desk)
+            if (Math.abs(diff) < 1) {
+                let zA = 0;
+                let zB = 0;
+                
+                if (a.type === 'furniture') zA = 0; // Base Z
+                else zA = (a.data as WallAttachment).y;
+
+                if (b.type === 'furniture') zB = 0;
+                else zB = (b.data as WallAttachment).y;
+                
+                return zA - zB;
+            }
+            
+            return diff;
+
+            return depthA - depthB;
         });
-    }, [layout.items, viewAngle, layout.room]);
+    }, [layout.items, layout.attachments, viewAngle, layout.room]);
 
     return (
         <Group>
             {/* 1. Floor */}
-            <IsoFloor w={rw} h={rh} ppu={pixelsPerUnit} />
+            <IsoFloor w={rw} h={rh} ppu={pixelsPerUnit} color={layout.room.floorColor} thickness={4} />
 
             {/* 2. Back Walls */}
-            {/* In our rotated view, the "Back" walls are always at x=0 and y=0 ? */}
-            {/* Yes! If we rotated correctly, (0,0) is always the "Far Top" corner of the diamond. */}
             {/* Left Wall: along Y axis (x=0) */}
             <IsoWall 
                 start={{x: 0, y: rh}} 
@@ -708,51 +860,49 @@ const IsoScene: React.FC<IsoSceneProps> = ({
                 color="#4b5563"
             />
 
-            {/* 3. Wall Attachments */}
-            {(layout.attachments || []).map(attachment => {
-                // Calculate if attachment is dimmed (behind furniture)
-                const attCoords = getWallCoordinates(attachment.side, attachment.x, attachment.y, viewAngle, layout.room.width, layout.room.height);
-                const attDepth = attCoords.worldX + attCoords.worldY;
+            {/* 3. Combined Renderables (Furniture + Attachments) */}
+            {sortedRenderables.map((renderable) => {
+                if (renderable.type === 'furniture') {
+                    const item = renderable.data as FurnitureItem;
+                    return (
+                        <IsoFurniture
+                            key={item.id}
+                            item={item}
+                            angle={viewAngle}
+                            roomW={layout.room.width}
+                            roomH={layout.room.height}
+                            ppu={pixelsPerUnit}
+                            selected={layout.selectedItemId === item.id}
+                            isInvalid={invalidItems?.has(item.id)}
+                            onSelect={onSelectItem}
+                            onMove={onItemMove}
+                        />
+                    );
+                } else {
+                    const attachment = renderable.data as WallAttachment;
+                    
+                    // Re-calculate "isDimmed" logic if needed, or remove it since sorting handles visibility?
+                    // Actually, dimmed logic was visual feedback for "behind furniture".
+                    // If we sort correctly, we don't need dimming as much, but let's keep it if we can.
+                    // For now, let's skip isDimmed to verify sorting first, as calculating it O(N^2) might be slow inside map.
+                    const isDimmed = false;
 
-                // Check if any furniture blocks this attachment
-                const isDimmed = sortedItems.some(item => {
-                    const { x: rx, y: ry } = rotatePoint(item.x, item.y, viewAngle, layout.room.width, layout.room.height);
-                    const itemDepth = rx + ry;
-                    // Simple check: if furniture is closer (higher depth), dim attachment
-                    return itemDepth > attDepth + 10; // 10 inch buffer
-                });
-
-                return (
-                    <IsoWallAttachment
-                        key={attachment.id}
-                        attachment={attachment}
-                        viewAngle={viewAngle}
-                        roomW={layout.room.width}
-                        roomH={layout.room.height}
-                        ppu={pixelsPerUnit}
-                        selected={layout.selectedAttachmentId === attachment.id}
-                        isDimmed={isDimmed}
-                        onSelect={onSelectAttachment || (() => {})}
-                        onUpdate={onUpdateAttachment || (() => {})}
-                    />
-                );
+                    return (
+                        <IsoWallAttachment
+                            key={attachment.id}
+                            attachment={attachment}
+                            viewAngle={viewAngle}
+                            roomW={layout.room.width}
+                            roomH={layout.room.height}
+                            ppu={pixelsPerUnit}
+                            selected={layout.selectedAttachmentId === attachment.id}
+                            isDimmed={isDimmed}
+                            onSelect={onSelectAttachment || (() => {})}
+                            onUpdate={onUpdateAttachment || (() => {})}
+                        />
+                    );
+                }
             })}
-
-            {/* 4. Furniture */}
-            {sortedItems.map(item => (
-                <IsoFurniture
-                    key={item.id}
-                    item={item}
-                    angle={viewAngle}
-                    roomW={layout.room.width}
-                    roomH={layout.room.height}
-                    ppu={pixelsPerUnit}
-                    selected={layout.selectedItemId === item.id}
-                    isInvalid={invalidItems?.has(item.id)}
-                    onSelect={onSelectItem}
-                    onMove={onItemMove}
-                />
-            ))}
         </Group>
     );
 };

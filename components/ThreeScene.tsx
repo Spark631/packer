@@ -54,11 +54,11 @@ const WallObject: React.FC<{
   }, [width, height, attachments]);
 
   const extrudeSettings = useMemo(() => ({
-    depth: 4,
+    depth: 1, // Thinner walls for 3D view
     bevelEnabled: false
   }), []);
 
-  const zOffset = (side === 'back' || side === 'right') ? -4 : 0;
+  const zOffset = (side === 'back' || side === 'right') ? -1 : 0;
 
   return (
     <group position={position} rotation={rotation} visible={visible}>
@@ -80,11 +80,12 @@ const WallObject: React.FC<{
 
 // AttachmentObject component removed in favor of DraggableAttachment
 
-const RoomFloor: React.FC<{ width: number; height: number }> = ({ width, height }) => {
+const RoomFloor: React.FC<{ width: number; height: number; color?: string }> = ({ width, height, color = "#d6d3d1" }) => {
+  const thickness = 2; // Increased floor thickness
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[width / 2, 0, height / 2]} receiveShadow>
-      <planeGeometry args={[width, height]} />
-      <meshStandardMaterial color="#d6d3d1" roughness={0.8} metalness={0.2} />
+    <mesh position={[width / 2, -thickness / 2, height / 2]} receiveShadow>
+      <boxGeometry args={[width, thickness, height]} />
+      <meshStandardMaterial color={color} roughness={0.8} metalness={0.2} />
     </mesh>
   );
 };
@@ -290,44 +291,30 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
             onPointerDown={(e) => e.stopPropagation()}
         >
            <div className="flex flex-col gap-1">
-              <label className="text-xs font-bold text-gray-500 uppercase">Width</label>
+              <label className="text-xs font-bold text-gray-800 uppercase">Width</label>
               <div className="flex items-center gap-2 bg-gray-100 rounded px-2 py-1">
-                 <Maximize2 size={16} className="text-gray-400" />
+                 <Maximize2 size={16} className="text-gray-600" />
                  <input 
                     type="number" 
                     value={selectedAttachment.width} 
                     onChange={(e) => onUpdateAttachment(selectedAttachment.id, { width: Number(e.target.value) })}
-                    className="w-16 bg-transparent text-sm font-semibold outline-none"
+                    className="w-16 bg-transparent text-sm font-semibold outline-none text-gray-900"
                  />
-                 <span className="text-xs text-gray-400">"</span>
+                 <span className="text-xs text-gray-600">"</span>
               </div>
            </div>
            
            <div className="flex flex-col gap-1">
-              <label className="text-xs font-bold text-gray-500 uppercase">Height</label>
+              <label className="text-xs font-bold text-gray-800 uppercase">Height</label>
               <div className="flex items-center gap-2 bg-gray-100 rounded px-2 py-1">
-                 <ArrowUpFromLine size={16} className="text-gray-400" />
+                 <ArrowUpFromLine size={16} className="text-gray-600" />
                  <input 
                     type="number" 
                     value={selectedAttachment.height} 
                     onChange={(e) => onUpdateAttachment(selectedAttachment.id, { height: Number(e.target.value) })}
-                    className="w-16 bg-transparent text-sm font-semibold outline-none"
+                    className="w-16 bg-transparent text-sm font-semibold outline-none text-gray-900"
                  />
-                 <span className="text-xs text-gray-400">"</span>
-              </div>
-           </div>
-           
-           <div className="flex flex-col gap-1">
-              <label className="text-xs font-bold text-gray-500 uppercase">Elevation</label>
-              <div className="flex items-center gap-2 bg-gray-100 rounded px-2 py-1">
-                 <Move size={16} className="text-gray-400" />
-                 <input 
-                    type="number" 
-                    value={selectedAttachment.y} 
-                    onChange={(e) => onUpdateAttachment(selectedAttachment.id, { y: Number(e.target.value) })}
-                    className="w-16 bg-transparent text-sm font-semibold outline-none"
-                 />
-                 <span className="text-xs text-gray-400">"</span>
+                 <span className="text-xs text-gray-600">"</span>
               </div>
            </div>
 
@@ -335,12 +322,12 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
            
            <button 
              onClick={() => onDeleteAttachment && onDeleteAttachment(selectedAttachment.id)}
-             className="flex flex-col items-center gap-1 text-red-500 hover:text-red-700 transition-colors"
+             className="flex flex-col items-center gap-1 text-red-600 hover:text-red-800 transition-colors"
            >
               <div className="p-2 bg-red-50 rounded-full hover:bg-red-100 transition-colors">
                  <X size={18} />
               </div>
-              <span className="text-xs font-semibold">Delete</span>
+              <span className="text-xs font-bold">Delete</span>
            </button>
         </div>
       )}
@@ -356,7 +343,7 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
             }}
             onPointerDown={(e) => e.stopPropagation()}
           >
-             <div className="text-xs font-bold text-gray-400 px-2 py-1 border-b mb-1 uppercase tracking-wider">Add Object</div>
+             <div className="text-xs font-bold text-gray-600 px-2 py-1 border-b mb-1 uppercase tracking-wider">Add Object</div>
              <button onClick={() => handleAddStart('window')} className="text-left px-3 py-2 hover:bg-blue-50 text-gray-800 rounded text-sm font-medium flex items-center justify-between group">
                 Window <span className="opacity-0 group-hover:opacity-100 text-blue-500">→</span>
              </button>
@@ -380,44 +367,30 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
             onPointerDown={(e) => e.stopPropagation()}
         >
            <div className="flex flex-col gap-1">
-              <label className="text-xs font-bold text-gray-500 uppercase">Width</label>
+              <label className="text-xs font-bold text-gray-800 uppercase">Width</label>
               <div className="flex items-center gap-2 bg-gray-100 rounded px-2 py-1">
-                 <Maximize2 size={16} className="text-gray-400" />
+                 <Maximize2 size={16} className="text-gray-600" />
                  <input 
                     type="number" 
                     value={selectedAttachment.width} 
                     onChange={(e) => onUpdateAttachment(selectedAttachment.id, { width: Number(e.target.value) })}
-                    className="w-16 bg-transparent text-sm font-semibold outline-none"
+                    className="w-16 bg-transparent text-sm font-semibold outline-none text-gray-900"
                  />
-                 <span className="text-xs text-gray-400">"</span>
+                 <span className="text-xs text-gray-600">"</span>
               </div>
            </div>
            
            <div className="flex flex-col gap-1">
-              <label className="text-xs font-bold text-gray-500 uppercase">Height</label>
+              <label className="text-xs font-bold text-gray-800 uppercase">Height</label>
               <div className="flex items-center gap-2 bg-gray-100 rounded px-2 py-1">
-                 <ArrowUpFromLine size={16} className="text-gray-400" />
+                 <ArrowUpFromLine size={16} className="text-gray-600" />
                  <input 
                     type="number" 
                     value={selectedAttachment.height} 
                     onChange={(e) => onUpdateAttachment(selectedAttachment.id, { height: Number(e.target.value) })}
-                    className="w-16 bg-transparent text-sm font-semibold outline-none"
+                    className="w-16 bg-transparent text-sm font-semibold outline-none text-gray-900"
                  />
-                 <span className="text-xs text-gray-400">"</span>
-              </div>
-           </div>
-           
-           <div className="flex flex-col gap-1">
-              <label className="text-xs font-bold text-gray-500 uppercase">Elevation</label>
-              <div className="flex items-center gap-2 bg-gray-100 rounded px-2 py-1">
-                 <Move size={16} className="text-gray-400" />
-                 <input 
-                    type="number" 
-                    value={selectedAttachment.y} 
-                    onChange={(e) => onUpdateAttachment(selectedAttachment.id, { y: Number(e.target.value) })}
-                    className="w-16 bg-transparent text-sm font-semibold outline-none"
-                 />
-                 <span className="text-xs text-gray-400">"</span>
+                 <span className="text-xs text-gray-600">"</span>
               </div>
            </div>
 
@@ -425,12 +398,12 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
            
            <button 
              onClick={() => onDeleteAttachment && onDeleteAttachment(selectedAttachment.id)}
-             className="flex flex-col items-center gap-1 text-red-500 hover:text-red-700 transition-colors"
+             className="flex flex-col items-center gap-1 text-red-600 hover:text-red-800 transition-colors"
            >
               <div className="p-2 bg-red-50 rounded-full hover:bg-red-100 transition-colors">
                  <X size={18} />
               </div>
-              <span className="text-xs font-semibold">Delete</span>
+              <span className="text-xs font-bold">Delete</span>
            </button>
         </div>
       )}
@@ -451,7 +424,7 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
             />
             
             <group position={[-layout.room.width / 2, 0, -layout.room.height / 2]}>
-                <RoomFloor width={layout.room.width} height={layout.room.height} />
+                <RoomFloor width={layout.room.width} height={layout.room.height} color={layout.room.floorColor} />
                 <DynamicRoomWalls 
                     width={layout.room.width} 
                     height={layout.room.height} 

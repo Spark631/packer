@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Stage, Layer, Rect, Group, Line } from "react-konva";
 import { LayoutState, FurnitureItem } from "../types";
-import { RotateCw, Trash2, Plus, X, Copy, RotateCcw, Share2, Camera, Box, LayoutGrid, Sparkles, Pencil } from "lucide-react";
+import { RotateCw, Trash2, Plus, X, Copy, RotateCcw, Share2, Camera, Box, LayoutGrid, Sparkles, Pencil, Home } from "lucide-react";
 import { checkValidity, SNAP_SIZE, SNAP_THRESHOLD } from "../utils/geometry";
-import { FURNITURE_PRESETS, FurniturePreset } from "../data/presets";
+import { FURNITURE_PRESETS, FurniturePreset, FLOOR_PRESETS } from "../data/presets";
 import { serializeLayout, deserializeLayout } from "../utils/serialization";
 import ImageModelCreator from "./ImageModelCreator";
 import URLImage from "./URLImage";
@@ -19,6 +20,7 @@ interface LayoutEditorProps {
 }
 
 const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
+  const router = useRouter();
   const [layout, setLayout] = useState<LayoutState>(initialState);
   const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
   const [invalidItems, setInvalidItems] = useState<Set<string>>(new Set());
@@ -30,6 +32,8 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   const [isoAngle, setIsoAngle] = useState<0 | 90 | 180 | 270>(0); // New angle state
   const [aiPrompt, setAiPrompt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  
+  const [isRoomSelected, setIsRoomSelected] = useState(false); // State for room selection
   
   // View Mode: '2d' or 'iso'
   const [viewMode, setViewMode] = useState<'2d' | 'iso'>('iso');
@@ -79,7 +83,18 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     return null; // Avoid hydration mismatch or rendering before client
   }
 
-  const PIXELS_PER_UNIT = 5; // 1 inch = 5 pixels. 10ft room = 120in = 600px.
+  // Calculate scale to fit room in window with padding
+  const PADDING = 100;
+  const availableWidth = windowSize.width - PADDING;
+  const availableHeight = windowSize.height - PADDING;
+
+  // Determine scale to fit the room
+  const scaleX = availableWidth / layout.room.width;
+  const scaleY = availableHeight / layout.room.height;
+  
+  // Use the smaller scale to ensure it fits entirely
+  // But cap max scale (e.g. 5) to prevent tiny rooms from being massive
+  const PIXELS_PER_UNIT = Math.min(scaleX, scaleY, 5);
   
   // Center the room in the stage
   const stageCenterX = windowSize.width / 2;
@@ -117,7 +132,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   const contentOffsetY = -roomPixelHeight / 2;
 
   const handleSelect = (id: string | null) => {
-
+    setIsRoomSelected(false);
     setLayout((prev) => ({ ...prev, selectedItemId: id }));
   };
 
@@ -134,8 +149,15 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     const clickedOnStage = e.target === e.target.getStage();
     const clickedOnRoomFloor = e.target.attrs.name === "room-floor";
     
-    if (clickedOnStage || clickedOnRoomFloor) {
-      setLayout((prev) => ({ ...prev, selectedItemId: null }));
+    if (clickedOnRoomFloor) {
+      setLayout((prev) => ({ ...prev, selectedItemId: null, selectedAttachmentId: null }));
+      setIsRoomSelected(true);
+      return;
+    }
+
+    if (clickedOnStage) {
+      setLayout((prev) => ({ ...prev, selectedItemId: null, selectedAttachmentId: null }));
+      setIsRoomSelected(false);
     }
   };
 
@@ -247,6 +269,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   };
 
   const handleSelectAttachment = (id: string | null) => {
+    setIsRoomSelected(false);
     setLayout((prev) => ({
         ...prev,
         selectedAttachmentId: id,
@@ -276,6 +299,13 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     if (confirm("Reset layout? All items will be removed.")) {
         setLayout(prev => ({ ...prev, items: [], selectedItemId: null }));
     }
+  };
+
+  const handleUpdateRoom = (updates: Partial<typeof layout.room>) => {
+    setLayout(prev => ({
+        ...prev,
+        room: { ...prev.room, ...updates }
+    }));
   };
 
   const handleAddItem = (preset: FurniturePreset) => {
@@ -364,6 +394,35 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     setIsAddPanelOpen(false);
   };
 
+  const handleHome = () => {
+    // Save to localStorage
+    try {
+        const savedRoomsStr = localStorage.getItem('packer_rooms');
+        const savedRooms: LayoutState[] = savedRoomsStr ? JSON.parse(savedRoomsStr) : [];
+        
+        const currentRoom = {
+            ...layout,
+            id: layout.id || Date.now().toString(),
+            name: layout.name || "Untitled Room",
+            lastModified: Date.now()
+        };
+
+        // Upsert
+        const existingIndex = savedRooms.findIndex(r => r.id === currentRoom.id);
+        if (existingIndex >= 0) {
+            savedRooms[existingIndex] = currentRoom;
+        } else {
+            savedRooms.push(currentRoom);
+        }
+
+        localStorage.setItem('packer_rooms', JSON.stringify(savedRooms));
+    } catch (e) {
+        console.error("Failed to save room", e);
+    }
+    
+    router.push('/');
+  };
+
   // Grid generation
   const gridLines = [];
   const gridSize = 12; // 12 inches (1 foot) grid
@@ -445,7 +504,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
                       name="room-floor"
                       width={roomPixelWidth}
                       height={roomPixelHeight}
-                      fill="#d6d3d1" // Warm Grey / Beige Concrete
+                      fill={layout.room.floorColor || "#d6d3d1"}
                     />
                     
                     {/* Grid */}
@@ -520,10 +579,32 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       </Stage>
       
       {/* Overlay UI for info */}
-      <div className="absolute top-4 left-4 bg-white/90 backdrop-blur p-4 rounded-xl shadow-sm border border-gray-200 z-10 pointer-events-none flex gap-4">
+      <div className="absolute top-4 left-4 bg-white/90 backdrop-blur p-4 rounded-xl shadow-sm border border-gray-200 z-10 flex flex-col gap-2">
         <div>
-           <h1 className="font-bold text-lg text-gray-800">Packer</h1>
-           <p className="text-sm text-gray-500">Room: {layout.room.width}" x {layout.room.height}"</p>
+           <input
+             type="text"
+             value={layout.name || ""}
+             placeholder="Untitled Room"
+             onChange={(e) => setLayout(prev => ({ ...prev, name: e.target.value }))}
+             className="font-bold text-lg text-gray-800 bg-transparent border-none focus:ring-0 p-0 w-full placeholder-gray-400"
+           />
+           <div className="flex items-center gap-2 mt-1">
+             <span className="text-sm text-gray-500">Room:</span>
+             <input
+               type="number"
+               value={layout.room.width}
+               onChange={(e) => handleUpdateRoom({ width: Math.max(1, Number(e.target.value)) })}
+               className="w-16 p-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
+             />
+             <span className="text-sm text-gray-500">x</span>
+             <input
+               type="number"
+               value={layout.room.height}
+               onChange={(e) => handleUpdateRoom({ height: Math.max(1, Number(e.target.value)) })}
+               className="w-16 p-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
+             />
+             <span className="text-sm text-gray-500">"</span>
+           </div>
         </div>
       </div>
       
@@ -563,6 +644,13 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       </div>
 
        <div className="absolute top-4 right-4 flex gap-2 z-10">
+          <button 
+             onClick={handleHome}
+             className="bg-white p-3 rounded-full shadow-sm text-gray-700 hover:text-indigo-600 hover:bg-indigo-50 transition-all border border-gray-200"
+             title="Save & Home"
+           >
+             <Home size={20} />
+           </button>
           <button 
              onClick={handleShare}
              className="bg-white p-3 rounded-full shadow-sm text-gray-700 hover:text-blue-600 hover:bg-blue-50 transition-all border border-gray-200"
@@ -706,6 +794,57 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
                   </div>
               );
            })()}
+        </div>
+      )}
+
+      {/* Room Properties Panel */}
+      {isRoomSelected && (
+        <div className="absolute top-20 right-4 w-72 bg-white/95 backdrop-blur p-6 rounded-2xl shadow-xl z-20 border border-gray-200">
+           <div className="flex justify-between items-center mb-6">
+             <h3 className="font-bold text-gray-800">Room Properties</h3>
+             <button onClick={() => setIsRoomSelected(false)} className="p-1 hover:bg-gray-100 rounded-full text-gray-500">
+               <X size={20} />
+             </button>
+           </div>
+           
+            <div className="space-y-4">
+                <div>
+                    <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Material Presets</label>
+                    <div className="grid grid-cols-2 gap-2 mb-4">
+                        {FLOOR_PRESETS.map(preset => (
+                            <button
+                                key={preset.id}
+                                onClick={() => handleUpdateRoom({ floorColor: preset.color })}
+                                className="flex items-center gap-2 p-2 rounded-lg border border-gray-200 hover:border-indigo-500 hover:bg-indigo-50 transition-all text-left"
+                            >
+                                <div 
+                                    className="w-6 h-6 rounded-full border border-gray-200 shadow-sm flex-shrink-0" 
+                                    style={{ backgroundColor: preset.color }}
+                                />
+                                <span className="text-xs font-medium text-gray-700">{preset.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="pt-4 border-t border-gray-100">
+                    <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Custom Color</label>
+                    <div className="flex gap-2">
+                        <input 
+                        type="color" 
+                        value={layout.room.floorColor || "#d6d3d1"} 
+                        onChange={(e) => handleUpdateRoom({ floorColor: e.target.value })}
+                        className="w-10 h-10 rounded border-0 cursor-pointer"
+                        />
+                        <input 
+                        type="text"
+                        value={layout.room.floorColor || "#d6d3d1"}
+                        onChange={(e) => handleUpdateRoom({ floorColor: e.target.value })}
+                        className="flex-1 p-2 border border-gray-300 rounded-lg text-sm"
+                        />
+                    </div>
+                </div>
+            </div>
         </div>
       )}
 

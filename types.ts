@@ -1,6 +1,7 @@
 export interface Room {
   width: number; // inches
   height: number; // inches
+  floorColor?: string;
 }
 
 export interface FurnitureItem {
@@ -32,6 +33,9 @@ export interface WallAttachment {
 }
 
 export interface LayoutState {
+  id?: string;
+  name?: string;
+  lastModified?: number;
   room: Room;
   items: FurnitureItem[];
   attachments: WallAttachment[];
