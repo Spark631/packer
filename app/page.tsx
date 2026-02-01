@@ -1,29 +1,62 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { serializeLayout } from "../utils/serialization";
 import { LayoutState } from "../types";
+import { Trash2, Clock, Map } from "lucide-react";
 
 export default function LandingPage() {
   const router = useRouter();
   const [width, setWidth] = useState(108); // 9 ft
   const [height, setHeight] = useState(132); // 11 ft
+  const [savedRooms, setSavedRooms] = useState<LayoutState[]>([]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('packer_rooms');
+    if (saved) {
+        try {
+            setSavedRooms(JSON.parse(saved));
+        } catch (e) {
+            console.error("Failed to parse saved rooms", e);
+        }
+    }
+  }, []);
 
   const handleStart = () => {
     const layout: LayoutState = {
+      id: Date.now().toString(),
+      name: "Untitled Room",
+      lastModified: Date.now(),
       room: { width, height },
       items: [],
+      attachments: [], // Add required property
       selectedItemId: null,
     };
     const serialized = serializeLayout(layout);
     router.push(`/editor?layout=${serialized}`);
   };
 
+  const loadRoom = (room: LayoutState) => {
+    const serialized = serializeLayout(room);
+    router.push(`/editor?layout=${serialized}`);
+  };
+
+  const deleteRoom = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newRooms = savedRooms.filter(r => r.id !== id);
+    setSavedRooms(newRooms);
+    localStorage.setItem('packer_rooms', JSON.stringify(newRooms));
+  };
+
   const loadDemo = () => {
      // Create a demo layout with some items
      const layout: LayoutState = {
+        id: "demo-" + Date.now(),
+        name: "NYC Bedroom Demo",
+        lastModified: Date.now(),
         room: { width: 108, height: 132 },
+        attachments: [],
         items: [
             { id: "demo-bed", type: "bed", width: 60, height: 80, x: 10, y: 10, rotation: 0 }, // Queen
             { id: "demo-desk", type: "desk", width: 24, height: 48, x: 80, y: 10, rotation: 90 },
@@ -78,6 +111,37 @@ export default function LandingPage() {
                NYC Bedroom (9' x 11')
              </button>
            </div>
+
+           {savedRooms.length > 0 && (
+             <div className="pt-6 border-t border-gray-100">
+                <h3 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Your Saved Rooms</h3>
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    {savedRooms.sort((a,b) => (b.lastModified || 0) - (a.lastModified || 0)).map(room => (
+                        <div 
+                            key={room.id}
+                            onClick={() => loadRoom(room)}
+                            className="group flex items-center justify-between p-3 rounded-lg border border-gray-200 hover:border-blue-400 hover:shadow-sm cursor-pointer transition-all bg-gray-50 hover:bg-white"
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-white rounded-md border border-gray-200 text-blue-600">
+                                    <Map size={16} />
+                                </div>
+                                <div className="text-left">
+                                    <div className="font-semibold text-gray-800 text-sm">{room.name || "Untitled Room"}</div>
+                                    <div className="text-xs text-gray-500">{room.room.width}" x {room.room.height}" • {new Date(room.lastModified || 0).toLocaleDateString()}</div>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={(e) => deleteRoom(room.id || "", e)}
+                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                                <Trash2 size={16} />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+             </div>
+           )}
         </div>
       </div>
     </div>
