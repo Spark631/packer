@@ -54,7 +54,26 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   // Initialize from URL if present
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const localId = params.get("localId");
     const layoutParam = params.get("layout");
+
+    if (localId) {
+        try {
+            const savedRoomsStr = localStorage.getItem('packer_rooms');
+            if (savedRoomsStr) {
+                const savedRooms: LayoutState[] = JSON.parse(savedRoomsStr);
+                const found = savedRooms.find(r => r.id === localId);
+                if (found) {
+                    setLayout(found);
+                    // Don't process layoutParam if localId found
+                    return;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load local room", e);
+        }
+    }
+
     if (layoutParam) {
         const loadedLayout = deserializeLayout(layoutParam);
         if (loadedLayout) {
@@ -66,10 +85,20 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   // Update URL on layout change (debounced)
   useEffect(() => {
     const timer = setTimeout(() => {
-        const serialized = serializeLayout(layout);
-        const url = new URL(window.location.href);
-        url.searchParams.set("layout", serialized);
-        window.history.replaceState({}, "", url.toString());
+        try {
+            const params = new URLSearchParams(window.location.search);
+            // If using localId, avoid updating URL with full layout to prevent length limits
+            if (params.has("localId")) return;
+
+            const serialized = serializeLayout(layout);
+            if (serialized) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("layout", serialized);
+                window.history.replaceState({}, "", url.toString());
+            }
+        } catch (e) {
+            console.error("Failed to update URL with layout", e);
+        }
     }, 500);
     return () => clearTimeout(timer);
   }, [layout]);
@@ -224,7 +253,8 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       ...prev,
       items: prev.items.map((item) => {
         if (item.id === prev.selectedItemId) {
-          const newRotation = item.rotation === 0 ? 90 : 0;
+          // Cycle through 0, 90, 180, 270
+          const newRotation = (item.rotation + 90) % 360;
           return { ...item, rotation: newRotation };
         }
         return item;
@@ -418,6 +448,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
         localStorage.setItem('packer_rooms', JSON.stringify(savedRooms));
     } catch (e) {
         console.error("Failed to save room", e);
+        alert("Failed to save room. Local storage might be full.");
     }
     
     router.push('/');

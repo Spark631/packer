@@ -38,8 +38,13 @@ export default function LandingPage() {
   };
 
   const loadRoom = (room: LayoutState) => {
-    const serialized = serializeLayout(room);
-    router.push(`/editor?layout=${serialized}`);
+    // Prefer localId if available to avoid URL length limits
+    if (room.id) {
+        router.push(`/editor?localId=${room.id}`);
+    } else {
+        const serialized = serializeLayout(room);
+        router.push(`/editor?layout=${serialized}`);
+    }
   };
 
   const deleteRoom = (id: string, e: React.MouseEvent) => {
