@@ -10,6 +10,7 @@ import { FolderPlus, Heading1, X, Move, Maximize2, ArrowUpFromLine } from "lucid
 
 import { checkValidity } from "../utils/geometry";
 import { DraggableAttachment } from "./DraggableAttachment";
+import { GenerativeFurniture } from "./GenerativeFurniture";
 
 interface ThreeSceneProps {
   layout: LayoutState;
@@ -191,9 +192,24 @@ const FurnitureBox: React.FC<{ item: FurnitureItem; isInvalid: boolean }> = ({ i
     <mesh position={[posX, posY, posZ]} castShadow receiveShadow>
       <boxGeometry args={[width, height, depthLength]} />
       {/* Materials ... simplified for brevity if needed, but keeping full assignment is better */}
-       <meshStandardMaterial color={isInvalid ? "#ef4444" : (item.color || "#3b82f6")} />
+       <meshStandardMaterial color={isInvalid ? "#ef4444" : (item.color || "#3b82f6")} map={texture} />
     </mesh>
   );
+};
+
+const SmartFurniture: React.FC<{ item: FurnitureItem; isInvalid: boolean }> = ({ item, isInvalid }) => {
+    // 1. Procedural AI Furniture (Highest Priority)
+    if (item.proceduralCode) {
+        return (
+            <GenerativeFurniture 
+                item={item} 
+                code={item.proceduralCode} 
+                fallback={<FurnitureBox item={item} isInvalid={isInvalid} />} 
+            />
+        );
+    }
+
+    return <FurnitureBox item={item} isInvalid={isInvalid} />;
 };
 
 const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachment, onUpdateAttachment, onDeleteAttachment, onSelectAttachment }) => {
@@ -447,7 +463,7 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ layout, onClose, onAddAttachmen
                 />
                 
                 {layout.items.map(item => (
-                    <FurnitureBox key={item.id} item={item} isInvalid={invalidItems.has(item.id)} />
+                    <SmartFurniture key={item.id} item={item} isInvalid={invalidItems.has(item.id)} />
                 ))}
             </group>
 

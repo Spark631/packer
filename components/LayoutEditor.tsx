@@ -3,8 +3,8 @@
 import React, { useState, useEffect } from "react";
 import { Stage, Layer, Rect, Group, Line } from "react-konva";
 import { LayoutState, FurnitureItem } from "../types";
-import { RotateCw, Trash2, Plus, X, Copy, RotateCcw, Share2, Camera, Box, LayoutGrid } from "lucide-react";
-import { checkValidity } from "../utils/geometry";
+import { RotateCw, Trash2, Plus, X, Copy, RotateCcw, Share2, Camera, Box, LayoutGrid, Sparkles, Pencil } from "lucide-react";
+import { checkValidity, SNAP_SIZE, SNAP_THRESHOLD } from "../utils/geometry";
 import { FURNITURE_PRESETS, FurniturePreset } from "../data/presets";
 import { serializeLayout, deserializeLayout } from "../utils/serialization";
 import ImageModelCreator from "./ImageModelCreator";
@@ -26,7 +26,10 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
   const [isShared, setIsShared] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [isThreeSceneOpen, setIsThreeSceneOpen] = useState(false); // New state for 3D overlay
+  const [isEditPanelOpen, setIsEditPanelOpen] = useState(false); // New state for edit panel
   const [isoAngle, setIsoAngle] = useState<0 | 90 | 180 | 270>(0); // New angle state
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
   
   // View Mode: '2d' or 'iso'
   const [viewMode, setViewMode] = useState<'2d' | 'iso'>('iso');
@@ -138,30 +141,16 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
 
   const handleDragMove = (id: string, e: any) => {
     const { x, y } = e.target.position();
-    // In local group coordinates (which align with the grid), X/Y are correct relative to the group origin (center).
-    // But we need them relative to the room top-left corner (0,0 of room content).
-    // The items are children of the Group. 
-    // The Group has offset (-width/2, -height/2).
-    // Wait, e.target.position() returns position relative to PARENT (the Group).
-    // Since we didn't change the item's parent structure, x/y are relative to Group origin (0,0 at room center?).
-    // Actually, we placed the Room Floor at (0,0) inside the group previously?
-    // Let's check previous implementation:
-    // <Group x={roomX} y={roomY}> ... items ... </Group>
-    // Here roomX/roomY were top-left.
-    //
-    // NOW: We want to center-pivot.
-    // <Group x={stageCenterX} y={stageCenterY} rotation={...} scaleY={...}>
-    //    <Group x={-roomWidth/2} y={-roomHeight/2}>  <-- Inner container to center content
-    //       <Rect ... room ... />
-    //       <Item ... />
-    //    </Group>
-    // </Group>
-    //
-    // So item.x / item.y are relative to the Inner Group (top-left of room).
-    // e.target.position() should return that.
     
-    const newX = Math.round(x / PIXELS_PER_UNIT);
-    const newY = Math.round(y / PIXELS_PER_UNIT);
+    // Magnetic snap to grid
+    const rawX = x / PIXELS_PER_UNIT;
+    const rawY = y / PIXELS_PER_UNIT;
+    
+    const snappedX = Math.round(rawX / SNAP_SIZE) * SNAP_SIZE;
+    const snappedY = Math.round(rawY / SNAP_SIZE) * SNAP_SIZE;
+    
+    const finalX = Math.abs(rawX - snappedX) < SNAP_THRESHOLD ? snappedX : Math.round(rawX);
+    const finalY = Math.abs(rawY - snappedY) < SNAP_THRESHOLD ? snappedY : Math.round(rawY);
     
     const movingItem = layout.items.find(i => i.id === id);
     if (!movingItem) return;
@@ -169,8 +158,8 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     // Construct temporary rect for the moving item
     const isRotated = movingItem.rotation === 90 || movingItem.rotation === 270;
     const movingRect = {
-       x: newX,
-       y: newY,
+       x: finalX,
+       y: finalY,
        width: isRotated ? movingItem.height : movingItem.width,
        height: isRotated ? movingItem.width : movingItem.height,
     };
@@ -180,13 +169,29 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
 
   const handleDragEnd = (id: string, e: any) => {
     const { x, y } = e.target.position();
-    const newX = Math.round(x / PIXELS_PER_UNIT);
-    const newY = Math.round(y / PIXELS_PER_UNIT);
+    
+    const rawX = x / PIXELS_PER_UNIT;
+    const rawY = y / PIXELS_PER_UNIT;
+    
+    const snappedX = Math.round(rawX / SNAP_SIZE) * SNAP_SIZE;
+    const snappedY = Math.round(rawY / SNAP_SIZE) * SNAP_SIZE;
+    
+    const finalX = Math.abs(rawX - snappedX) < SNAP_THRESHOLD ? snappedX : Math.round(rawX);
+    const finalY = Math.abs(rawY - snappedY) < SNAP_THRESHOLD ? snappedY : Math.round(rawY);
     
     setLayout((prev) => ({
       ...prev,
       items: prev.items.map((item) =>
-        item.id === id ? { ...item, x: newX, y: newY } : item
+        item.id === id ? { ...item, x: finalX, y: finalY } : item
+      ),
+    }));
+  };
+
+  const handleUpdateItem = (id: string, updates: Partial<FurnitureItem>) => {
+    setLayout((prev) => ({
+      ...prev,
+      items: prev.items.map((item) =>
+        item.id === id ? { ...item, ...updates } : item
       ),
     }));
   };
@@ -300,6 +305,49 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
     navigator.clipboard.writeText(url.toString());
     setIsShared(true);
     setTimeout(() => setIsShared(false), 2000);
+  };
+
+  const handleGenerateItem = async () => {
+    if (!aiPrompt.trim()) return;
+    setIsGenerating(true);
+    
+    try {
+        const res = await fetch('/api/generate-model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: aiPrompt })
+        });
+        
+        const data = await res.json();
+        
+        if (data.code) {
+             const newItem: FurnitureItem = {
+                id: Date.now().toString(),
+                type: 'custom',
+                width: 36, // Default sizes
+                height: 36,
+                depth: 30,
+                x: layout.room.width / 2 - 18,
+                y: layout.room.height / 2 - 18,
+                rotation: 0,
+                color: "#60a5fa",
+                proceduralCode: data.code
+             };
+             
+             setLayout((prev) => ({
+                ...prev,
+                items: [...prev.items, newItem],
+                selectedItemId: newItem.id,
+             }));
+             setIsAddPanelOpen(false);
+             setAiPrompt("");
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Failed to generate model.");
+    } finally {
+        setIsGenerating(false);
+    }
   };
 
   const handleSavePhotoItem = (item: FurnitureItem) => {
@@ -424,6 +472,30 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
                           draggable: true,
                           onDragMove: (e: any) => handleDragMove(item.id, e),
                           onDragEnd: (e: any) => handleDragEnd(item.id, e),
+                          dragBoundFunc: (pos: { x: number, y: number }) => {
+                              // Only snap in 2D mode here. Iso mode is handled in IsoScene.
+                              if (viewMode === 'iso') return pos;
+                              
+                              const parentAbsX = groupX + contentOffsetX;
+                              const parentAbsY = groupY + contentOffsetY;
+                              
+                              const relX = pos.x - parentAbsX;
+                              const relY = pos.y - parentAbsY;
+                              
+                              const rawX = relX / PIXELS_PER_UNIT;
+                              const rawY = relY / PIXELS_PER_UNIT;
+                              
+                              const snappedX = Math.round(rawX / SNAP_SIZE) * SNAP_SIZE;
+                              const snappedY = Math.round(rawY / SNAP_SIZE) * SNAP_SIZE;
+                              
+                              const finalX = Math.abs(rawX - snappedX) < SNAP_THRESHOLD ? snappedX : rawX;
+                              const finalY = Math.abs(rawY - snappedY) < SNAP_THRESHOLD ? snappedY : rawY;
+                              
+                              return {
+                                x: parentAbsX + finalX * PIXELS_PER_UNIT,
+                                y: parentAbsY + finalY * PIXELS_PER_UNIT
+                              };
+                          },
                           onClick: (e: any) => {
                             e.cancelBubble = true;
                             handleSelect(item.id);
@@ -530,6 +602,16 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
       {layout.selectedItemId && (
         <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur px-8 py-4 rounded-2xl shadow-xl z-10 flex gap-6 items-center border border-gray-200">
            <button 
+             onClick={() => setIsEditPanelOpen(true)}
+             className="flex flex-col items-center gap-1 text-gray-600 hover:text-indigo-600 transition-colors"
+           >
+             <div className="p-2 bg-gray-100 rounded-full group-hover:bg-indigo-100 transition-colors">
+                <Pencil size={20} />
+             </div>
+             <span className="text-xs font-semibold">Edit</span>
+           </button>
+           <div className="w-px h-10 bg-gray-200"></div>
+           <button 
              onClick={handleRotate}
              className="flex flex-col items-center gap-1 text-gray-600 hover:text-blue-600 transition-colors"
            >
@@ -561,6 +643,72 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
         </div>
       )}
 
+      {/* Edit Item Panel */}
+      {isEditPanelOpen && layout.selectedItemId && (
+        <div className="absolute top-20 right-4 w-72 bg-white/95 backdrop-blur p-6 rounded-2xl shadow-xl z-20 border border-gray-200">
+           <div className="flex justify-between items-center mb-6">
+             <h3 className="font-bold text-gray-800">Edit Attributes</h3>
+             <button onClick={() => setIsEditPanelOpen(false)} className="p-1 hover:bg-gray-100 rounded-full text-gray-500">
+               <X size={20} />
+             </button>
+           </div>
+           
+           {(() => {
+              const item = layout.items.find(i => i.id === layout.selectedItemId);
+              if (!item) return null;
+              
+              return (
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Width (in)</label>
+                          <input 
+                            type="number" 
+                            value={item.width} 
+                            onChange={(e) => handleUpdateItem(item.id, { width: Math.max(1, Number(e.target.value)) })}
+                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Depth (in)</label>
+                          <input 
+                            type="number" 
+                            value={item.height} 
+                            onChange={(e) => handleUpdateItem(item.id, { height: Math.max(1, Number(e.target.value)) })}
+                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Height (in)</label>
+                          <input 
+                            type="number" 
+                            value={item.depth || 20} 
+                            onChange={(e) => handleUpdateItem(item.id, { depth: Math.max(1, Number(e.target.value)) })}
+                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Color</label>
+                          <div className="flex gap-2">
+                              <input 
+                                type="color" 
+                                value={item.color || "#3b82f6"} 
+                                onChange={(e) => handleUpdateItem(item.id, { color: e.target.value })}
+                                className="w-10 h-10 rounded border-0 cursor-pointer"
+                              />
+                              <input 
+                                type="text"
+                                value={item.color || "#3b82f6"}
+                                onChange={(e) => handleUpdateItem(item.id, { color: e.target.value })}
+                                className="flex-1 p-2 border border-gray-300 rounded-lg text-sm"
+                              />
+                          </div>
+                      </div>
+                  </div>
+              );
+           })()}
+        </div>
+      )}
+
       {/* Add Furniture Panel */}
       {isAddPanelOpen && (
         <div className="absolute top-0 right-0 h-full w-96 bg-white shadow-2xl z-20 overflow-y-auto border-l border-gray-100 p-8">
@@ -579,6 +727,25 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
                <Camera size={24} />
                <span>Create from Photo</span>
              </button>
+           </div>
+           
+           <div className="mb-8 p-4 bg-blue-50 rounded-xl border border-blue-100">
+              <h3 className="flex items-center gap-2 text-sm font-bold text-blue-800 uppercase tracking-wider mb-2">
+                 <Sparkles size={16} /> AI Generation
+              </h3>
+              <textarea 
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="e.g. A modern round coffee table"
+                className="w-full p-2 text-sm border border-blue-200 rounded mb-2 h-20 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+              <button 
+                onClick={handleGenerateItem}
+                disabled={isGenerating}
+                className="w-full bg-blue-600 text-white py-2 rounded font-semibold text-sm hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isGenerating ? "Dreaming..." : "Generate 3D Model"}
+              </button>
            </div>
            
            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Presets</h3>

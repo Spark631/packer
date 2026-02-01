@@ -12,6 +12,7 @@ export interface FurnitureItem {
   y: number; // units
   rotation: number; // degrees, typically 0 or 90
   imageUrl?: string; // Optional base64 data URL for photo-based items
+  proceduralCode?: string; // Optional AI-generated React component code
   depth?: number; // Visual Z-height
   color?: string; // Hex color
 }

@@ -1,5 +1,8 @@
 import { FurnitureItem, Room } from "../types";
 
+export const SNAP_SIZE = 6; // inches
+export const SNAP_THRESHOLD = 2; // inches
+
 export interface Rect {
   x: number;
   y: number;

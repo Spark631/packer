@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Rect, Group, Text } from "react-konva";
 import useImage from "use-image";
 import { FurnitureItem } from "../types";
-import { Camera, Ruler, Check, X, BoxSelect } from "lucide-react";
+import { Camera, Ruler, Check, X, BoxSelect, Sparkles } from "lucide-react";
 
 interface ImageModelCreatorProps {
   onClose: () => void;
@@ -27,6 +27,7 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
   const [cropRect, setCropRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -114,7 +115,7 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
     return pixelDistance / refLength;
   };
 
-  const handleSave = () => {
+  const handleSave = async (generate3D: boolean = false) => {
     if (!cropRect || !imageSrc) return;
 
     const ppi = calculatePixelsPerInch();
@@ -146,17 +147,50 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
         0, 0, relativeCropW, relativeCropH // Dest
     );
 
-    const croppedDataUrl = canvas.toDataURL();
+    const croppedDataUrl = canvas.toDataURL("image/png");
+
+    let proceduralCode: string | undefined = undefined;
+
+    if (generate3D) {
+       setIsGenerating(true);
+       try {
+          // Remove prefix for API
+          const base64Image = croppedDataUrl.split(',')[1];
+          
+          const res = await fetch('/api/generate-model', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  image: base64Image,
+                  prompt: "Create a 3D model that matches this furniture item's shape and style." 
+              })
+          });
+          
+          const data = await res.json();
+          if (data.code) {
+             proceduralCode = data.code;
+          } else {
+             alert("Failed to generate 3D model, saving as image only.");
+          }
+       } catch (e) {
+          console.error(e);
+          alert("Error generating 3D model.");
+       } finally {
+          setIsGenerating(false);
+       }
+    }
 
     const newItem: FurnitureItem = {
       id: Date.now().toString(),
       type: "custom",
       width: Math.round(widthInInches),
       height: Math.round(heightInInches),
+      depth: 24, // Default depth, or maybe we can guess/ask?
       x: 0, // Will be centered in room by parent
       y: 0,
       rotation: 0,
-      imageUrl: croppedDataUrl
+      imageUrl: croppedDataUrl,
+      proceduralCode
     };
 
     onSave(newItem);
@@ -311,12 +345,25 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
                   >
                     Back
                   </button>
+                  
                   <button 
-                    disabled={!cropRect || cropRect.width === 0}
-                    onClick={handleSave}
+                    disabled={!cropRect || cropRect.width === 0 || isGenerating}
+                    onClick={() => handleSave(true)}
+                    className="flex items-center gap-2 bg-purple-600 disabled:bg-gray-300 text-white px-6 py-2 rounded-lg font-medium transition-colors mr-2"
+                  >
+                    {isGenerating ? "Analyzing..." : (
+                        <>
+                           AI 3D Model <Sparkles size={18} />
+                        </>
+                    )}
+                  </button>
+
+                  <button 
+                    disabled={!cropRect || cropRect.width === 0 || isGenerating}
+                    onClick={() => handleSave(false)}
                     className="flex items-center gap-2 bg-green-600 disabled:bg-gray-300 text-white px-6 py-2 rounded-lg font-medium transition-colors"
                   >
-                    Finish <Check size={18} />
+                    Save as Image <Check size={18} />
                   </button>
                 </>
             )}

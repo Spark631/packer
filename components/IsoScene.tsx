@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 import { Group, Shape, Path, Rect, Text } from "react-konva";
 import { LayoutState, FurnitureItem, WallAttachment } from "../types";
+import { SNAP_SIZE, SNAP_THRESHOLD } from "../utils/geometry";
 
 // --- Constants & Types ---
 interface IsoSceneProps {
@@ -188,6 +189,8 @@ const IsoFurniture: React.FC<{
     onSelect: (id: string) => void;
     onMove: (id: string, x: number, y: number) => void;
 }> = ({ item, angle, roomW, roomH, ppu, selected, isInvalid, onSelect, onMove }) => {
+    const startAbsPos = useRef<{x:number, y:number} | null>(null);
+
     // 1. Rotate Position
     const { x: rx, y: ry } = rotatePoint(item.x, item.y, angle, roomW, roomH);
 
@@ -197,6 +200,7 @@ const IsoFurniture: React.FC<{
         
         // Reset local drag offset
         e.target.position({ x: 0, y: 0 });
+        startAbsPos.current = null;
 
         // Calculate Delta Grid (Rotated space)
         // Inverse Iso: Gx = (Sx + 2Sy) / 2PPU, Gy = (2Sy - Sx) / 2PPU
@@ -223,10 +227,77 @@ const IsoFurniture: React.FC<{
             dWy = dGx;
         }
 
-        const newX = Math.round(item.x + dWx);
-        const newY = Math.round(item.y + dWy);
+        const targetX = item.x + dWx;
+        const targetY = item.y + dWy;
         
-        onMove(item.id, newX, newY);
+        const snappedX = Math.round(targetX / SNAP_SIZE) * SNAP_SIZE;
+        const snappedY = Math.round(targetY / SNAP_SIZE) * SNAP_SIZE;
+        
+        const finalX = Math.abs(targetX - snappedX) < SNAP_THRESHOLD ? snappedX : Math.round(targetX);
+        const finalY = Math.abs(targetY - snappedY) < SNAP_THRESHOLD ? snappedY : Math.round(targetY);
+        
+        onMove(item.id, finalX, finalY);
+    };
+
+    const dragBoundFunc = (pos: { x: number; y: number }) => {
+        if (!startAbsPos.current) return pos;
+
+        const sx = pos.x - startAbsPos.current.x;
+        const sy = pos.y - startAbsPos.current.y;
+
+        // 1. Screen Delta -> Grid Delta
+        const dGx = (sx + 2 * sy) / (2 * ppu);
+        const dGy = (2 * sy - sx) / (2 * ppu);
+
+        // 2. Grid Delta -> World Delta
+        let dWx = dGx;
+        let dWy = dGy;
+        
+        if (angle === 90) {
+             dWx = dGy; dWy = -dGx;
+        } else if (angle === 180) {
+            dWx = -dGx; dWy = -dGy;
+        } else if (angle === 270) {
+            dWx = -dGy; dWy = dGx;
+        }
+
+        // 3. Snap World Position
+        const targetX = item.x + dWx;
+        const targetY = item.y + dWy;
+        
+        const snappedX = Math.round(targetX / SNAP_SIZE) * SNAP_SIZE;
+        const snappedY = Math.round(targetY / SNAP_SIZE) * SNAP_SIZE;
+        
+        const finalX = Math.abs(targetX - snappedX) < SNAP_THRESHOLD ? snappedX : targetX;
+        const finalY = Math.abs(targetY - snappedY) < SNAP_THRESHOLD ? snappedY : targetY;
+        
+        // 4. Snapped World Delta
+        const finalDwx = finalX - item.x;
+        const finalDwy = finalY - item.y;
+        
+        // 5. World Delta -> Grid Delta
+        let finalDgx = finalDwx;
+        let finalDgy = finalDwy;
+        
+        if (angle === 90) {
+            finalDgx = -finalDwy;
+            finalDgy = finalDwx;
+        } else if (angle === 180) {
+            finalDgx = -finalDwx;
+            finalDgy = -finalDwy;
+        } else if (angle === 270) {
+            finalDgx = finalDwy;
+            finalDgy = -finalDwx;
+        }
+        
+        // 6. Grid Delta -> Screen Delta
+        const finalSx = (finalDgx - finalDgy) * ppu;
+        const finalSy = ((finalDgx + finalDgy) * ppu) / 2; // Z=0
+
+        return {
+            x: startAbsPos.current.x + finalSx,
+            y: startAbsPos.current.y + finalSy
+        };
     };
     
     const h = item.depth || 20; // Extrusion height
@@ -297,8 +368,12 @@ const IsoFurniture: React.FC<{
     return (
         <Group 
             draggable
-            onDragStart={() => onSelect(item.id)}
+            onDragStart={(e) => {
+                startAbsPos.current = e.target.getAbsolutePosition();
+                onSelect(item.id);
+            }}
             onDragEnd={handleDragEnd}
+            dragBoundFunc={dragBoundFunc}
             onClick={(e) => { e.cancelBubble = true; onSelect(item.id); }}
             onTap={(e) => { e.cancelBubble = true; onSelect(item.id); }}
         >
