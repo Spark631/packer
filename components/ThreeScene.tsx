@@ -52,21 +52,28 @@ const WallObject: React.FC<{
     return s;
   }, [width, height, attachments]);
 
+  const extrudeSettings = useMemo(() => ({
+    depth: 4,
+    bevelEnabled: false
+  }), []);
+
+  const zOffset = (side === 'back' || side === 'right') ? -4 : 0;
+
   return (
-    <mesh
-      visible={visible}
-      position={position}
-      rotation={rotation}
-      receiveShadow
-      castShadow
-      onClick={visible ? (e) => {
-        e.stopPropagation();
-        onWallClick(side, e.point, e);
-      } : undefined}
-    >
-      <shapeGeometry args={[shape]} />
-      <meshStandardMaterial color={side === "left" || side === "right" ? "#4b5563" : "#374151"} side={DoubleSide} />
-    </mesh>
+    <group position={position} rotation={rotation} visible={visible}>
+      <mesh
+        position={[0, 0, zOffset]}
+        receiveShadow
+        castShadow
+        onClick={visible ? (e) => {
+          e.stopPropagation();
+          onWallClick(side, e.point, e);
+        } : undefined}
+      >
+        <extrudeGeometry args={[shape, extrudeSettings]} />
+        <meshStandardMaterial color={side === "left" || side === "right" ? "#4b5563" : "#374151"} />
+      </mesh>
+    </group>
   );
 };
 

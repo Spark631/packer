@@ -41,20 +41,21 @@ export const DraggableAttachment: React.FC<DraggableAttachmentProps> = ({
 
   // Calculate initial position and rotation based on wall side
   const { position, rotation } = useMemo(() => {
+    const WALL_THICKNESS = 4;
     let pos: [number, number, number] = [0, 0, 0];
     let rot: [number, number, number] = [0, 0, 0];
 
     if (side === "back") {
-      pos = [x + width / 2, y + height / 2, 0];
+      pos = [x + width / 2, y + height / 2, -WALL_THICKNESS / 2];
       rot = [0, 0, 0];
     } else if (side === "front") {
-      pos = [x + width / 2, y + height / 2, roomHeight];
+      pos = [x + width / 2, y + height / 2, roomHeight + WALL_THICKNESS / 2];
       rot = [0, 0, 0];
     } else if (side === "left") {
-      pos = [0, y + height / 2, x + width / 2];
+      pos = [-WALL_THICKNESS / 2, y + height / 2, x + width / 2];
       rot = [0, Math.PI / 2, 0];
     } else if (side === "right") {
-      pos = [roomWidth, y + height / 2, x + width / 2];
+      pos = [roomWidth + WALL_THICKNESS / 2, y + height / 2, x + width / 2];
       rot = [0, -Math.PI / 2, 0];
     }
     return { position: new Vector3(...pos), rotation: formatRotation(rot) };

@@ -229,23 +229,6 @@ const IsoFurniture: React.FC<{
         onMove(item.id, newX, newY);
     };
     
-    // 2. Rotate Dimensions
-    // Standard rotation swap logic for width/depth
-    let rw = item.width;
-    let rh = item.height; // "depth" on grid
-    
-    // If view is rotated 90 or 270, the item's perceived w/h might swap relative to screen X/Y?
-    // Actually, simple point rotation handles position. 
-    // We just need to know if the item ITSELF is rotated relative to the new axes.
-    //
-    // Let's think:
-    // Item at 0,0 size 20x10. View 0. Drawn from 0,0 to 20,10.
-    // View 90. Item moves to (H, 0).
-    // The "Width" (x-axis size) becomes aligned with Y axis?
-    //
-    // Easier approach: Calculate the 4 corners of the base rect in world space, 
-    // rotate THEM, then draw.
-    
     const h = item.depth || 20; // Extrusion height
 
     // Original 4 corners of the base rect relative to (0,0)
@@ -254,9 +237,6 @@ const IsoFurniture: React.FC<{
     const iw = isItemRotated ? item.height : item.width;
     const id_ = isItemRotated ? item.width : item.height; // "depth" in 2D plan
 
-    // Local corners relative to item origin
-    // p1 = (0,0), p2 = (iw, 0), p3 = (iw, id_), p4 = (0, id_)
-    
     // World corners
     const w1 = { x: item.x, y: item.y };
     const w2 = { x: item.x + iw, y: item.y };
@@ -269,24 +249,51 @@ const IsoFurniture: React.FC<{
     const r3 = rotatePoint(w3.x, w3.y, angle, roomW, roomH);
     const r4 = rotatePoint(w4.x, w4.y, angle, roomW, roomH);
     
-    // Project to screen (Base)
-    const s1 = toScreen(r1.x, r1.y, 0, ppu);
-    const s2 = toScreen(r2.x, r2.y, 0, ppu);
-    const s3 = toScreen(r3.x, r3.y, 0, ppu);
-    const s4 = toScreen(r4.x, r4.y, 0, ppu);
+    const corners = [r1, r2, r3, r4];
+
+    // Project to screen (Base & Top)
+    const basePoints = corners.map(p => toScreen(p.x, p.y, 0, ppu));
+    const topPoints = corners.map(p => toScreen(p.x, p.y, h, ppu));
+
+    // Determine visible faces
+    // The "nearest" corner to the camera (bottom of diamond) has the highest (x+y) in rotated grid space.
+    // We draw the two faces connected to this corner.
     
-    // Project to screen (Top)
-    const t1 = toScreen(r1.x, r1.y, h, ppu);
-    const t2 = toScreen(r2.x, r2.y, h, ppu);
-    const t3 = toScreen(r3.x, r3.y, h, ppu);
-    const t4 = toScreen(r4.x, r4.y, h, ppu);
+    let maxDepth = -Infinity;
+    let nearIndex = 0;
+    
+    corners.forEach((p, i) => {
+        // Grid space depth = x + y
+        const depth = p.x + p.y;
+        if (depth > maxDepth) {
+            maxDepth = depth;
+            nearIndex = i;
+        }
+    });
+
+    // Indices of the corners connected to nearIndex
+    const prevIndex = (nearIndex - 1 + 4) % 4;
+    const nextIndex = (nearIndex + 1) % 4;
+
+    // Face 1: near -> next
+    const face1 = [
+        topPoints[nearIndex],
+        topPoints[nextIndex],
+        basePoints[nextIndex],
+        basePoints[nearIndex]
+    ];
+
+    // Face 2: prev -> near
+    const face2 = [
+        topPoints[prevIndex],
+        topPoints[nearIndex],
+        basePoints[nearIndex],
+        basePoints[prevIndex]
+    ];
 
     // Color logic
     const baseColor = isInvalid ? "#ef4444" : (item.color || "#3b82f6");
 
-    // Mouse interaction for top face
-    // Currently limited to clicking. Dragging in ISO needs inverse projection.
-    
     return (
         <Group 
             draggable
@@ -295,14 +302,14 @@ const IsoFurniture: React.FC<{
             onClick={(e) => { e.cancelBubble = true; onSelect(item.id); }}
             onTap={(e) => { e.cancelBubble = true; onSelect(item.id); }}
         >
-            {/* Right Face (Side 2-3) */}
+            {/* Face 1 */}
             <Shape
                 sceneFunc={(ctx, shape) => {
                     ctx.beginPath();
-                    ctx.moveTo(t2.x, t2.y);
-                    ctx.lineTo(t3.x, t3.y);
-                    ctx.lineTo(s3.x, s3.y);
-                    ctx.lineTo(s2.x, s2.y);
+                    ctx.moveTo(face1[0].x, face1[0].y);
+                    ctx.lineTo(face1[1].x, face1[1].y);
+                    ctx.lineTo(face1[2].x, face1[2].y);
+                    ctx.lineTo(face1[3].x, face1[3].y);
                     ctx.closePath();
                     ctx.fillStrokeShape(shape);
                 }}
@@ -312,14 +319,14 @@ const IsoFurniture: React.FC<{
                 strokeWidth={isInvalid ? 2 : (selected ? 1 : 0.5)}
             />
 
-            {/* Left Face (Side 3-4) */}
+            {/* Face 2 */}
             <Shape
                 sceneFunc={(ctx, shape) => {
                     ctx.beginPath();
-                    ctx.moveTo(t3.x, t3.y);
-                    ctx.lineTo(t4.x, t4.y);
-                    ctx.lineTo(s4.x, s4.y);
-                    ctx.lineTo(s3.x, s3.y);
+                    ctx.moveTo(face2[0].x, face2[0].y);
+                    ctx.lineTo(face2[1].x, face2[1].y);
+                    ctx.lineTo(face2[2].x, face2[2].y);
+                    ctx.lineTo(face2[3].x, face2[3].y);
                     ctx.closePath();
                     ctx.fillStrokeShape(shape);
                 }}
@@ -329,14 +336,14 @@ const IsoFurniture: React.FC<{
                 strokeWidth={isInvalid ? 2 : (selected ? 1 : 0.5)}
             />
 
-            {/* Top Face (Lighter) */}
+            {/* Top Face (Always visible) */}
             <Shape
                 sceneFunc={(ctx, shape) => {
                     ctx.beginPath();
-                    ctx.moveTo(t1.x, t1.y);
-                    ctx.lineTo(t2.x, t2.y);
-                    ctx.lineTo(t3.x, t3.y);
-                    ctx.lineTo(t4.x, t4.y);
+                    ctx.moveTo(topPoints[0].x, topPoints[0].y);
+                    ctx.lineTo(topPoints[1].x, topPoints[1].y);
+                    ctx.lineTo(topPoints[2].x, topPoints[2].y);
+                    ctx.lineTo(topPoints[3].x, topPoints[3].y);
                     ctx.closePath();
                     ctx.fillStrokeShape(shape);
                 }}
@@ -420,27 +427,34 @@ const IsoWallAttachment: React.FC<{
     const h = attachment.height;
     const offset = attachment.offsetFromWall || 0;
 
-    // For wall attachments, we render them as flat rectangles on the wall
-    // Bottom-left, bottom-right, top-right, top-left
-    let corners: Array<{x: number, y: number, z: number}> = [];
+    // Get rotated start and end points for the wall segment
+    // Since getWallCoordinates handles rotation, we use it for both points.
     
-    if (attachment.side === 'front' || attachment.side === 'back') {
-        // Horizontal wall (along X axis)
-        corners = [
-            { x: worldX, y: worldY, z: worldZ },
-            { x: worldX + w, y: worldY, z: worldZ },
-            { x: worldX + w, y: worldY, z: worldZ + h },
-            { x: worldX, y: worldY, z: worldZ + h }
-        ];
-    } else {
-        // Vertical wall (along Y axis)
-        corners = [
-            { x: worldX, y: worldY, z: worldZ },
-            { x: worldX, y: worldY + w, z: worldZ },
-            { x: worldX, y: worldY + w, z: worldZ + h },
-            { x: worldX, y: worldY, z: worldZ + h }
-        ];
-    }
+    const start = getWallCoordinates(
+        attachment.side, 
+        attachment.x, 
+        attachment.y, 
+        viewAngle, 
+        roomW, 
+        roomH
+    );
+
+    const end = getWallCoordinates(
+        attachment.side, 
+        attachment.x + w, 
+        attachment.y, 
+        viewAngle, 
+        roomW, 
+        roomH
+    );
+
+    // Construct 3D corners for the main face
+    const corners = [
+        { x: start.worldX, y: start.worldY, z: start.worldZ },            // Bottom-Start
+        { x: end.worldX, y: end.worldY, z: end.worldZ },                  // Bottom-End
+        { x: end.worldX, y: end.worldY, z: end.worldZ + h },              // Top-End
+        { x: start.worldX, y: start.worldY, z: start.worldZ + h }         // Top-Start
+    ];
 
     const screenCorners = corners.map(c => toScreen(c.x, c.y, c.z, ppu));
     const [s1, s2, s3, s4] = screenCorners;
@@ -449,21 +463,51 @@ const IsoWallAttachment: React.FC<{
     const shelfDepth = attachment.type === 'shelf' ? (offset || 12) : 0;
     let shelfFrontCorners: any[] = [];
     if (shelfDepth > 0) {
-        if (attachment.side === 'front') {
-            shelfFrontCorners = [
-                toScreen(worldX, worldY - shelfDepth, worldZ, ppu),
-                toScreen(worldX + w, worldY - shelfDepth, worldZ, ppu),
-                toScreen(worldX + w, worldY - shelfDepth, worldZ + h, ppu),
-                toScreen(worldX, worldY - shelfDepth, worldZ + h, ppu)
-            ];
-        } else if (attachment.side === 'back') {
-            shelfFrontCorners = [
-                toScreen(worldX, worldY + shelfDepth, worldZ, ppu),
-                toScreen(worldX + w, worldY + shelfDepth, worldZ, ppu),
-                toScreen(worldX + w, worldY + shelfDepth, worldZ + h, ppu),
-                toScreen(worldX, worldY + shelfDepth, worldZ + h, ppu)
-            ];
-        }
+        // We need to know the "outward" direction for the shelf depth
+        // This depends on the wall orientation
+        // Simplified: Since we don't have vector math handy, let's use the known wall axes.
+        // Wall Start->End vector is (end.worldX - start.worldX, end.worldY - start.worldY)
+        // Normal vector (outward) is perpendicular to Wall Vector
+        // But "outward" depends on which side of the wall is "inside" the room.
+        // Room interior is always [0, W] x [0, H] ?
+        // Actually, wall attachments are on the perimeter. Outward usually means towards interior? 
+        // Or "offsetFromWall" implies sticking OUT into the room.
+        // So we want vector pointing INTO the room.
+        
+        // Wall vectors:
+        // Front (y=0): Along X. Normal (0, 1) points into room.
+        // Back (y=H): Along X. Normal (0, -1) points into room.
+        // Left (x=0): Along Y. Normal (1, 0) points into room.
+        // Right (x=W): Along Y. Normal (-1, 0) points into room.
+        
+        let nx = 0, ny = 0;
+        if (attachment.side === 'front') { nx = 0; ny = 1; }
+        else if (attachment.side === 'back') { nx = 0; ny = -1; }
+        else if (attachment.side === 'left') { nx = 1; ny = 0; }
+        else if (attachment.side === 'right') { nx = -1; ny = 0; }
+        
+        // Rotate the normal vector
+        const rotatedNormal = rotatePoint(nx, ny, viewAngle, 0, 0); // Rotate relative to origin
+        // But rotatePoint assumes rotation around room center?
+        // No, rotatePoint impl:
+        // case 90: return { x: roomH - y, y: x };
+        // If we rotate a vector, we don't care about translation (room dimensions).
+        // Let's use simplified rotation for vectors:
+        // 0: x, y
+        // 90: -y, x
+        // 180: -x, -y
+        // 270: y, -x
+        
+        let rnx = nx, rny = ny;
+        if (viewAngle === 90) { rnx = -ny; rny = nx; }
+        else if (viewAngle === 180) { rnx = -nx; rny = -ny; }
+        else if (viewAngle === 270) { rnx = ny; rny = -nx; }
+        
+        // Shelf front face is shifted by normal * depth
+        const shiftX = rnx * shelfDepth;
+        const shiftY = rny * shelfDepth;
+        
+        shelfFrontCorners = corners.map(c => toScreen(c.x + shiftX, c.y + shiftY, c.z, ppu));
     }
 
     const opacity = isDimmed ? 0.4 : 0.9;
