@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { FurniturePart, FurnitureAnalysis, normalizeParts } from './geometry';
+import { FurnitureAnalysis, PlacedPart, normalizeParts } from './geometry';
 
 type Provider = 'gemini' | 'openai';
 
@@ -101,19 +101,39 @@ COMMON FURNITURE BASES (identify correctly):
 - Flat base: solid rectangular or circular base
 
 CURVED PARTS (armrests, arched backs, curved legs):
-When a part is curved or arched (not straight), mark it with curved properties:
+Use "curved" ONLY for parts with a visible, pronounced bend. A flat panel that merely
+looks angled is NOT curved - give it a "rotation" instead. A wrongly-curved part is far
+more damaging than a wrongly-flat one.
 - curved: true
-- curveDirection: the axis the curve bends along ("x", "y", or "z")
-  - For an armrest curving downward from front to back: curveDirection = "z"
-  - For a curved backrest bowing outward: curveDirection = "z"  
-  - For a curved leg bowing outward: curveDirection = "x" or "z"
-- curveAngle: total bend angle in radians (0.785 = 45°, 1.57 = 90°)
+- curveDirection: which plane the part bows in. The arc stays CENTERED on "position".
+  - "y" = the part spans its WIDTH (x) and bows forward/back in z.
+          Use for a backrest or seat that wraps around the sitter. THIS IS THE COMMON ONE.
+  - "x" = the part spans its WIDTH (x) and bows up/down in y.
+          Use for an arched rail or a bowed crossbar.
+  - "z" = the part spans its DEPTH (z) and bows up/down in y.
+          Use for an armrest curving down from front to back, or a dished seat.
+- curveAngle: total bend angle in radians. Keep it SMALL for gentle curves:
+  0.3 = a subtle bow, 0.785 = 45°, 1.57 = a quarter circle. A plywood chair back is
+  usually 0.3-0.6, never more than 1.0.
 - segments: optional, defaults to 4
 
-EXAMPLE curved armrest:
-{ "name": "armrest", "shape": "box", "proportions": { "width": 0.06, "height": 0.04, "depth": 0.35 }, 
-  "position": { "x": 0.45, "y": 0.55, "z": 0.05 }, "curved": true, "curveDirection": "z", 
+EXAMPLE curved armrest (spans depth, curving down front to back):
+{ "name": "armrest", "shape": "box", "proportions": { "width": 0.06, "height": 0.04, "depth": 0.35 },
+  "position": { "x": 0.45, "y": 0.55, "z": 0.05 }, "curved": true, "curveDirection": "z",
   "curveAngle": 0.6, "segments": 4, "count": 2, "mirror": "x" }
+
+EXAMPLE - side chair with a gently curved back panel and thin metal legs.
+Note the back posts: they physically bridge the seat and the backrest, so nothing floats.
+{
+  "furnitureType": "side chair with curved wood back",
+  "parts": [
+    { "name": "seat", "shape": "box", "proportions": { "width": 0.9, "height": 0.06, "depth": 0.85 }, "position": { "x": 0, "y": 0.45, "z": 0.05 } },
+    { "name": "front leg", "shape": "cylinder", "proportions": { "width": 0.05, "height": 0.45, "depth": 0.05 }, "position": { "x": 0.4, "y": 0.225, "z": 0.4 }, "count": 2, "mirror": "x" },
+    { "name": "rear leg", "shape": "cylinder", "proportions": { "width": 0.05, "height": 0.45, "depth": 0.05 }, "position": { "x": 0.4, "y": 0.225, "z": -0.35 }, "count": 2, "mirror": "x" },
+    { "name": "back post", "shape": "box", "proportions": { "width": 0.04, "height": 0.5, "depth": 0.05 }, "position": { "x": 0.4, "y": 0.7, "z": -0.35 }, "count": 2, "mirror": "x" },
+    { "name": "back panel", "shape": "box", "proportions": { "width": 0.82, "height": 0.34, "depth": 0.04 }, "position": { "x": 0, "y": 0.82, "z": -0.33 }, "curved": true, "curveDirection": "y", "curveAngle": 0.4, "segments": 5 }
+  ]
+}
 
 EXAMPLE for a table with X-shaped cross base:
 {
@@ -150,79 +170,17 @@ function generateMeshCode(
       </mesh>`;
 }
 
-// Generate curved segments for a part
-function generateCurvedPartCode(part: FurniturePart, index: number): string {
-  const segments = part.segments || 4;
-  const curveAngle = part.curveAngle || 0.5;
-  const curveDir = part.curveDirection || 'z';
+// Generate code for a single part. Curves have already been reduced to straight
+// segments by normalizeParts, so every part reaching here is a plain rotated box.
+function generatePartCode(part: PlacedPart, index: number): string {
   const { width: pw, height: ph, depth: pd } = part.proportions;
   const { x: px, y: py, z: pz } = part.position;
+  const rot = part.rotation;
   const partName = part.name.replace(/\s+/g, '_');
-  
-  const meshes: string[] = [];
-  
-  // Calculate arc length (use depth for z-direction curves, width for x-direction)
-  const arcLength = curveDir === 'z' ? pd : curveDir === 'x' ? pw : pd;
-  const segmentSize = arcLength / segments;
-  const radius = arcLength / curveAngle;
-  const angleStep = curveAngle / segments;
-  
-  for (let i = 0; i < segments; i++) {
-    const angle = angleStep * i;
-    let segX = px, segY = py, segZ = pz;
-    let rotX = 0, rotY = 0, rotZ = 0;
-    
-    // Calculate position along arc based on curve direction
-    if (curveDir === 'z') {
-      // Curve in Y-Z plane (armrest curving down)
-      segY = py + radius * (1 - Math.cos(angle));
-      segZ = pz + radius * Math.sin(angle);
-      rotX = angle;
-    } else if (curveDir === 'x') {
-      // Curve in X-Y plane
-      segX = px + radius * Math.sin(angle);
-      segY = py + radius * (1 - Math.cos(angle));
-      rotZ = -angle;
-    } else if (curveDir === 'y') {
-      // Curve in X-Z plane
-      segX = px + radius * Math.sin(angle);
-      segZ = pz + radius * (1 - Math.cos(angle));
-      rotY = angle;
-    }
-    
-    const position = `${segX.toFixed(3)} * width, ${segY.toFixed(3)} * height, ${segZ.toFixed(3)} * depth`;
-    const rotation = `${rotX.toFixed(3)}, ${rotY.toFixed(3)}, ${rotZ.toFixed(3)}`;
-    
-    // Geometry args - segment is shorter in the curve direction
-    let geoArgs: string;
-    if (part.shape === 'cylinder') {
-      geoArgs = `${(pw / 2).toFixed(3)} * width, ${(pw / 2).toFixed(3)} * width, ${segmentSize.toFixed(3)} * depth, 8`;
-    } else {
-      if (curveDir === 'z') {
-        geoArgs = `${pw.toFixed(3)} * width, ${ph.toFixed(3)} * height, ${segmentSize.toFixed(3)} * depth`;
-      } else if (curveDir === 'x') {
-        geoArgs = `${segmentSize.toFixed(3)} * width, ${ph.toFixed(3)} * height, ${pd.toFixed(3)} * depth`;
-      } else {
-        geoArgs = `${pw.toFixed(3)} * width, ${ph.toFixed(3)} * height, ${segmentSize.toFixed(3)} * depth`;
-      }
-    }
-    
-    meshes.push(generateMeshCode(part.shape, geoArgs, position, rotation, `${partName}-${index}-seg${i}`));
-  }
-  
-  return meshes.join('\n');
-}
 
-// Generate code for a single straight part
-function generateStraightPartCode(part: FurniturePart, index: number): string {
-  const { width: pw, height: ph, depth: pd } = part.proportions;
-  const { x: px, y: py, z: pz } = part.position;
-  const rot = part.rotation || { x: 0, y: 0, z: 0 };
-  const partName = part.name.replace(/\s+/g, '_');
-  
   const position = `${px.toFixed(3)} * width, ${py.toFixed(3)} * height, ${pz.toFixed(3)} * depth`;
-  const rotation = `${(rot.x || 0).toFixed(3)}, ${(rot.y || 0).toFixed(3)}, ${(rot.z || 0).toFixed(3)}`;
-  
+  const rotation = `${rot.x.toFixed(3)}, ${rot.y.toFixed(3)}, ${rot.z.toFixed(3)}`;
+
   let geoArgs: string;
   if (part.shape === 'cylinder') {
     // cylinderGeometry: radiusTop, radiusBottom, height, radialSegments
@@ -244,11 +202,7 @@ function generateCodeFromAnalysis(analysis: FurnitureAnalysis): string {
     throw new Error('Analysis contained no usable furniture parts');
   }
 
-  const meshCode = parts.map((part, index) =>
-    part.curved
-      ? generateCurvedPartCode(part, index)
-      : generateStraightPartCode(part, index)
-  );
+  const meshCode = parts.map(generatePartCode);
 
   const componentName = analysis.furnitureType
     .split(/\s+/)

@@ -6,6 +6,10 @@
 // a slab out in front of the carcass) or x/z are given on a 0..1 scale instead of
 // -0.5..0.5. These passes repair the analysis so it always renders as one connected
 // solid sitting inside the item's own dimensions.
+//
+// Curved parts are converted to straight segments up front, so every later pass deals
+// only with boxes. Segments of one curve stay rigid relative to each other by sharing a
+// group id - a backrest is repositioned as a whole, never bent apart.
 
 export interface FurniturePart {
   name: string;
@@ -27,10 +31,25 @@ export interface FurnitureAnalysis {
   parts: FurniturePart[];
 }
 
+// A part resolved to a concrete, straight, rotated box ready to emit.
+export interface PlacedPart {
+  name: string;
+  shape: 'box' | 'cylinder' | 'sphere';
+  proportions: { width: number; height: number; depth: number };
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number };
+  group: number; // Parts sharing a group move together during snapping.
+}
+
 export const EPSILON = 1e-4;
 
 type Axis = 'x' | 'y' | 'z';
 const AXES: Axis[] = ['x', 'y', 'z'];
+const SIZE_KEY: Record<Axis, 'width' | 'height' | 'depth'> = {
+  x: 'width',
+  y: 'height',
+  z: 'depth',
+};
 
 // Drop parts the model described with missing or nonsensical numbers, and copy the rest
 // so the normalization passes can mutate them freely.
@@ -56,6 +75,15 @@ export function sanitizeParts(parts: FurniturePart[]): FurniturePart[] {
         y: num(part.position.y, 0),
         z: num(part.position.z, 0),
       },
+      rotation: {
+        x: num(part.rotation?.x, 0),
+        y: num(part.rotation?.y, 0),
+        z: num(part.rotation?.z, 0),
+      },
+      curveAngle: part.curved ? num(part.curveAngle, 0.5) : part.curveAngle,
+      segments: part.curved
+        ? Math.min(Math.max(Math.round(num(part.segments, 4)), 2), 12)
+        : part.segments,
     }));
 }
 
@@ -99,123 +127,319 @@ export function expandPart(part: FurniturePart): FurniturePart[] {
   return copies;
 }
 
-// Half-size of a part's axis-aligned bounding box. Rotation is ignored: rotated parts
-// are rare and over-estimating their extent would drag the whole assembly out of shape.
-function halfExtents(part: FurniturePart): Record<Axis, number> {
+// Approximate a curved part with straight segments swept along an arc.
+//
+// The arc is CENTERED on the part's stated position: it runs from -curveAngle/2 to
+// +curveAngle/2 so the chord's midpoint stays put and the ends bow away symmetrically.
+// Sweeping from 0 instead (as an earlier version did) marched the whole part off its
+// position by a full arc length, which is how a curved backrest ended up as a staircase
+// of blocks flying off into space.
+function expandCurvedPart(part: FurniturePart, group: number): PlacedPart[] {
+  const segmentCount = part.segments || 4;
+  const curveAngle = part.curveAngle || 0.5;
+  const dir = part.curveDirection || 'z';
+  const { width: pw, height: ph, depth: pd } = part.proportions;
+  const { x: px, y: py, z: pz } = part.position;
+
+  // Which local dimension runs along the arc, and which one bulges.
+  // 'x': spans width, bulges in y (an arched rail).
+  // 'y': spans width, bulges in z (a backrest curving around the sitter).
+  // 'z': spans depth, bulges in y (an armrest curving down front-to-back).
+  const arcLength = dir === 'z' ? pd : pw;
+  const bulgeThickness = dir === 'y' ? pd : ph;
+
+  // Degenerate curve - emit it as a single straight box rather than dividing by ~zero.
+  if (curveAngle < 0.01 || arcLength < EPSILON) {
+    return [toPlaced(part, part.position, group)];
+  }
+
+  const radius = arcLength / curveAngle;
+  const angleStep = curveAngle / segmentCount;
+  const half = curveAngle / 2;
+
+  // Space segments by chord length and give them a little extra so the wedge-shaped
+  // gaps between adjacent rotated boxes close up.
+  const chord = 2 * radius * Math.sin(angleStep / 2);
+  const segmentLength = chord + bulgeThickness * Math.tan(angleStep / 2);
+  // Distance from the chord midpoint to the arc, removed so the part stays centered.
+  const apexOffset = radius * Math.cos(half);
+
+  const placed: PlacedPart[] = [];
+
+  for (let i = 0; i < segmentCount; i++) {
+    const angle = -half + angleStep * (i + 0.5);
+    const along = radius * Math.sin(angle);
+    const across = radius * Math.cos(angle) - apexOffset;
+
+    let position: { x: number; y: number; z: number };
+    let rotation: { x: number; y: number; z: number };
+    let proportions: { width: number; height: number; depth: number };
+
+    if (dir === 'z') {
+      position = { x: px, y: py + across, z: pz + along };
+      rotation = { x: angle, y: 0, z: 0 };
+      proportions = { width: pw, height: ph, depth: segmentLength };
+    } else if (dir === 'x') {
+      position = { x: px + along, y: py + across, z: pz };
+      rotation = { x: 0, y: 0, z: -angle };
+      proportions = { width: segmentLength, height: ph, depth: pd };
+    } else {
+      position = { x: px + along, y: py, z: pz + across };
+      rotation = { x: 0, y: angle, z: 0 };
+      proportions = { width: segmentLength, height: ph, depth: pd };
+    }
+
+    placed.push({
+      name: `${part.name}_seg${i}`,
+      shape: part.shape,
+      proportions,
+      position,
+      rotation,
+      group,
+    });
+  }
+
+  return placed;
+}
+
+function toPlaced(
+  part: FurniturePart,
+  position: { x: number; y: number; z: number },
+  group: number
+): PlacedPart {
+  return {
+    name: part.name,
+    shape: part.shape,
+    proportions: { ...part.proportions },
+    position: { ...position },
+    rotation: {
+      x: part.rotation?.x || 0,
+      y: part.rotation?.y || 0,
+      z: part.rotation?.z || 0,
+    },
+    group,
+  };
+}
+
+// Half-size of a part's axis-aligned bounding box, accounting for rotation.
+// For a rotated box the world extent along each axis is |R| applied to the local
+// half-extents. Curve segments are always rotated, so ignoring this would badly
+// under-measure them and let them escape the unit box.
+function halfExtents(part: PlacedPart): Record<Axis, number> {
   const { width, height, depth } = part.proportions;
-  if (part.shape === 'sphere') {
-    const r = width / 2;
-    return { x: r, y: r, z: r };
-  }
-  if (part.shape === 'cylinder') {
-    return { x: width / 2, y: height / 2, z: width / 2 };
-  }
-  return { x: width / 2, y: height / 2, z: depth / 2 };
+  const local =
+    part.shape === 'sphere'
+      ? { x: width / 2, y: width / 2, z: width / 2 }
+      : part.shape === 'cylinder'
+        ? { x: width / 2, y: height / 2, z: width / 2 }
+        : { x: width / 2, y: height / 2, z: depth / 2 };
+
+  const { x: rx, y: ry, z: rz } = part.rotation;
+  if (!rx && !ry && !rz) return local;
+
+  const [cx, sx] = [Math.cos(rx), Math.sin(rx)];
+  const [cy, sy] = [Math.cos(ry), Math.sin(ry)];
+  const [cz, sz] = [Math.cos(rz), Math.sin(rz)];
+
+  // R = Rx * Ry * Rz (three.js default Euler order), absolute values only.
+  const m = [
+    [cy * cz, cy * sz, sy],
+    [sx * sy * cz - cx * sz, sx * sy * sz + cx * cz, -sx * cy],
+    [-(cx * sy * cz + sx * sz), -(cx * sy * sz - sx * cz), cx * cy],
+  ].map(row => row.map(Math.abs));
+
+  return {
+    x: m[0][0] * local.x + m[0][1] * local.y + m[0][2] * local.z,
+    y: m[1][0] * local.x + m[1][1] * local.y + m[1][2] * local.z,
+    z: m[2][0] * local.x + m[2][1] * local.y + m[2][2] * local.z,
+  };
 }
 
-function volumeOf(part: FurniturePart): number {
-  const h = halfExtents(part);
-  return h.x * h.y * h.z;
+interface Box {
+  min: Record<Axis, number>;
+  max: Record<Axis, number>;
 }
 
-// Signed overlap of two parts along one axis. Positive = interpenetrating,
+function boxOf(parts: PlacedPart[]): Box {
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const part of parts) {
+    const h = halfExtents(part);
+    for (const axis of AXES) {
+      min[axis] = Math.min(min[axis], part.position[axis] - h[axis]);
+      max[axis] = Math.max(max[axis], part.position[axis] + h[axis]);
+    }
+  }
+  return { min, max };
+}
+
+function volumeOf(box: Box): number {
+  return AXES.reduce((acc, axis) => acc * Math.max(box.max[axis] - box.min[axis], 0), 1);
+}
+
+// Signed overlap of two boxes along one axis. Positive = interpenetrating,
 // zero = exactly flush, negative = the size of the gap between them.
-function overlapOn(a: FurniturePart, b: FurniturePart, axis: Axis): number {
-  return halfExtents(a)[axis] + halfExtents(b)[axis] - Math.abs(a.position[axis] - b.position[axis]);
+function overlapOn(a: Box, b: Box, axis: Axis): number {
+  return Math.min(a.max[axis], b.max[axis]) - Math.max(a.min[axis], b.min[axis]);
 }
 
-// Pull any disconnected part onto the nearest already-connected part.
-// Parts are anchored largest-first, so the carcass anchors the drawer fronts rather than
-// the other way round.
-export function snapDisconnectedParts(parts: FurniturePart[]): void {
-  // Curved parts are approximated by segments swept along an arc, so their AABB is not
-  // meaningful here - leave them where the model put them.
-  const snappable = parts.filter(p => !p.curved);
-  if (snappable.length < 2) return;
+interface Group {
+  members: PlacedPart[];
+  box: Box;
+}
 
-  const ordered = [...snappable].sort((a, b) => volumeOf(b) - volumeOf(a));
-  const anchored: FurniturePart[] = [ordered[0]];
+function touching(a: Box, b: Box): boolean {
+  return AXES.every(axis => overlapOn(a, b, axis) >= -EPSILON);
+}
 
-  for (const part of ordered.slice(1)) {
-    let best: { target: FurniturePart; faceContact: boolean; distance: number } | null = null;
+// Move a group so it meets the target box, closing the gap on every separated axis.
+function shiftToMeet(group: Group, target: Box): void {
+  for (const axis of AXES) {
+    const gap = -overlapOn(group.box, target, axis);
+    if (gap > EPSILON) {
+      const groupCenter = (group.box.min[axis] + group.box.max[axis]) / 2;
+      const targetCenter = (target.min[axis] + target.max[axis]) / 2;
+      const shift = Math.sign(targetCenter - groupCenter) * gap;
+      for (const part of group.members) part.position[axis] += shift;
+      group.box.min[axis] += shift;
+      group.box.max[axis] += shift;
+    }
+  }
+}
 
-    for (const target of anchored) {
-      const gaps = AXES.map(axis => Math.max(0, -overlapOn(part, target, axis)));
-      const distance = Math.hypot(...gaps);
-      // Touching or interpenetrating on every axis - already connected, leave it alone.
-      if (distance <= EPSILON) {
-        best = null;
-        break;
+// Pull genuinely orphaned groups onto the body of the furniture.
+//
+// Connectivity is decided by the assembly as given, not by processing order: we find
+// everything already reachable from the largest group through touching parts, and only
+// relocate what is left over. An earlier version anchored groups largest-first, which
+// dragged a correctly-attached backrest down onto the seat merely because the posts
+// holding it up had not been anchored yet.
+//
+// A multi-segment curve shares one group id, so it moves as one rigid piece.
+export function snapDisconnectedParts(parts: PlacedPart[]): void {
+  const byGroup = new Map<number, PlacedPart[]>();
+  for (const part of parts) {
+    const members = byGroup.get(part.group);
+    if (members) members.push(part);
+    else byGroup.set(part.group, [part]);
+  }
+  if (byGroup.size < 2) return;
+
+  const groups: Group[] = [...byGroup.values()].map(members => ({
+    members,
+    box: boxOf(members),
+  }));
+
+  // Seed the connected component with the largest group - the seat, carcass, tabletop.
+  const largest = groups.reduce((a, b) => (volumeOf(b.box) > volumeOf(a.box) ? b : a));
+  const connected = new Set<Group>([largest]);
+
+  // Grow the component until nothing else is already touching it.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const group of groups) {
+      if (connected.has(group)) continue;
+      if ([...connected].some(c => touching(group.box, c.box))) {
+        connected.add(group);
+        grew = true;
       }
+    }
+  }
 
-      // Prefer a target this part can meet face-to-face: one where it already overlaps
-      // on two axes, so closing the gap on the third lands it flat against a face.
-      // Without this a drawer front will happily snap to the edge of the drawer front
-      // above it - technically touching, but still visibly floating off the carcass.
-      const overlappingAxes = AXES.filter(axis => overlapOn(part, target, axis) > EPSILON).length;
-      const faceContact = overlappingAxes >= 2;
+  // Whatever is still outside the component is floating. Attach the closest one, then
+  // reconsider - once it lands, it may be what a further orphan should attach to.
+  const orphans = groups.filter(g => !connected.has(g));
+  while (orphans.length > 0) {
+    let best: { orphan: Group; target: Box; faceContact: boolean; distance: number } | null =
+      null;
 
-      const better =
-        !best ||
-        (faceContact && !best.faceContact) ||
-        (faceContact === best.faceContact && distance < best.distance);
-      if (better) best = { target, faceContact, distance };
+    for (const orphan of orphans) {
+      for (const target of connected) {
+        const gaps = AXES.map(axis => Math.max(0, -overlapOn(orphan.box, target.box, axis)));
+        const distance = Math.hypot(...gaps);
+
+        // Prefer a target this group can meet face-to-face: one it already overlaps on
+        // two axes, so closing the gap on the third lands it flat against a face.
+        // Without this a drawer front snaps to the edge of the drawer front above it -
+        // technically touching, but still visibly floating off the carcass.
+        const overlappingAxes = AXES.filter(
+          axis => overlapOn(orphan.box, target.box, axis) > EPSILON
+        ).length;
+        const faceContact = overlappingAxes >= 2;
+
+        const better =
+          !best ||
+          (faceContact && !best.faceContact) ||
+          (faceContact === best.faceContact && distance < best.distance);
+        if (better) best = { orphan, target: target.box, faceContact, distance };
+      }
     }
 
-    // Close the gap on every separated axis, moving toward the nearest neighbour. For a
-    // floating drawer front this is exactly the translation that makes it flush with the
-    // carcass face, since that is the shortest way to remove the gap.
-    if (best) {
-      for (const axis of AXES) {
-        const gap = -overlapOn(part, best.target, axis);
-        if (gap > EPSILON) {
-          const direction = Math.sign(best.target.position[axis] - part.position[axis]);
-          part.position[axis] += direction * gap;
-        }
-      }
-    }
-
-    anchored.push(part);
+    if (!best) break;
+    shiftToMeet(best.orphan, best.target);
+    connected.add(best.orphan);
+    orphans.splice(orphans.indexOf(best.orphan), 1);
   }
 }
 
 // Re-frame the assembly into the renderer's unit box: centered on x/z, resting on the
 // floor, and no larger than the item's own dimensions. This absorbs the case where the
 // model used a 0..1 convention for x/z instead of -0.5..0.5.
-export function fitToUnitBox(parts: FurniturePart[]): void {
-  const bounds = AXES.map(axis => {
-    let min = Infinity;
-    let max = -Infinity;
-    for (const part of parts) {
-      const h = halfExtents(part)[axis];
-      min = Math.min(min, part.position[axis] - h);
-      max = Math.max(max, part.position[axis] + h);
-    }
-    return { axis, min, max };
+export function fitToUnitBox(parts: PlacedPart[]): void {
+  const box = boxOf(parts);
+
+  // Only ever shrink - scaling a small model up would distort it.
+  const scales = AXES.map(axis => {
+    const extent = box.max[axis] - box.min[axis];
+    return isFinite(extent) && extent > 1 ? 1 / extent : 1;
   });
+  // Rotated parts have no meaningful per-axis local dimension, so any resize of them has
+  // to be uniform or the arc would shear.
+  const uniformScale = Math.min(...scales);
 
-  for (const { axis, min, max } of bounds) {
-    const extent = max - min;
-    if (!isFinite(extent) || extent < EPSILON) continue;
+  AXES.forEach((axis, i) => {
+    const extent = box.max[axis] - box.min[axis];
+    if (!isFinite(extent) || extent < EPSILON) return;
 
-    // Only ever shrink - scaling a small model up would distort it.
-    const scale = extent > 1 ? 1 / extent : 1;
+    const scale = scales[i];
     // y rests on the floor (0..1); x and z are centered on the origin (-0.5..0.5).
     const targetMin = axis === 'y' ? 0 : -(extent * scale) / 2;
-    const sizeKey = axis === 'x' ? 'width' : axis === 'y' ? 'height' : 'depth';
 
     for (const part of parts) {
-      part.position[axis] = (part.position[axis] - min) * scale + targetMin;
-      if (scale !== 1) part.proportions[sizeKey] *= scale;
+      part.position[axis] = (part.position[axis] - box.min[axis]) * scale + targetMin;
+      const isRotated = !!(part.rotation.x || part.rotation.y || part.rotation.z);
+      if (!isRotated && scale !== 1) part.proportions[SIZE_KEY[axis]] *= scale;
+    }
+  });
+
+  if (uniformScale !== 1) {
+    for (const part of parts) {
+      if (part.rotation.x || part.rotation.y || part.rotation.z) {
+        part.proportions.width *= uniformScale;
+        part.proportions.height *= uniformScale;
+        part.proportions.depth *= uniformScale;
+      }
     }
   }
 }
 
-// Full repair pipeline: validate, expand repeats, connect stray parts, re-frame.
-export function normalizeParts(parts: FurniturePart[]): FurniturePart[] {
-  const expanded = sanitizeParts(parts).flatMap(expandPart);
-  if (expanded.length === 0) return [];
-  snapDisconnectedParts(expanded);
-  fitToUnitBox(expanded);
-  return expanded;
+// Full repair pipeline: validate, expand repeats and curves, connect stray parts, reframe.
+export function normalizeParts(parts: FurniturePart[]): PlacedPart[] {
+  const placed: PlacedPart[] = [];
+  let group = 0;
+
+  for (const part of sanitizeParts(parts)) {
+    for (const copy of expandPart(part)) {
+      // Each copy is its own rigid group; a curve's segments share their copy's group.
+      if (copy.curved) placed.push(...expandCurvedPart(copy, group));
+      else placed.push(toPlaced(copy, copy.position, group));
+      group++;
+    }
+  }
+
+  if (placed.length === 0) return [];
+  snapDisconnectedParts(placed);
+  fitToUnitBox(placed);
+  return placed;
 }
