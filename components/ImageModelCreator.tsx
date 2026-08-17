@@ -28,6 +28,8 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [showPromptInput, setShowPromptInput] = useState(false);
+  const [userPrompt, setUserPrompt] = useState("");
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -162,7 +164,7 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                   image: base64Image,
-                  prompt: "Create a 3D model that matches this furniture item's shape and style." 
+                  prompt: `The user describes this object as: "${userPrompt}". Create a 3D model that matches this description and the provided image shape.` 
               })
           });
           
@@ -348,7 +350,7 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
                   
                   <button 
                     disabled={!cropRect || cropRect.width === 0 || isGenerating}
-                    onClick={() => handleSave(true)}
+                    onClick={() => setShowPromptInput(true)}
                     className="flex items-center gap-2 bg-purple-600 disabled:bg-gray-300 text-white px-6 py-2 rounded-lg font-medium transition-colors mr-2"
                   >
                     {isGenerating ? "Analyzing..." : (
@@ -370,6 +372,44 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
           </div>
         </div>
       </div>
+      
+      {showPromptInput && (
+        <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="text-xl font-bold mb-2">Describe the Object</h3>
+            <p className="text-gray-500 mb-4 text-sm">
+              Help the AI understand what it's looking at (e.g., "A wooden dining chair with round legs").
+            </p>
+            
+            <input
+              type="text"
+              value={userPrompt}
+              onChange={(e) => setUserPrompt(e.target.value)}
+              placeholder="e.g. Modern office chair"
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-purple-600 outline-none"
+              autoFocus
+            />
+            
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => setShowPromptInput(false)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  setShowPromptInput(false);
+                  handleSave(true);
+                }}
+                className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium flex items-center gap-2"
+              >
+                Generate <Sparkles size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

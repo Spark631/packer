@@ -1,5 +1,30 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## AI Configuration
+
+This app uses AI to generate 3D furniture models from images. You can choose between OpenAI (GPT-4o) or Google Gemini as the AI provider.
+
+### Environment Variables
+
+Create a `.env.local` file in the project root with:
+
+```bash
+# Choose your AI provider: "openai" or "gemini" (default: gemini)
+AI_PROVIDER=openai
+
+# API Keys (only the key for your selected provider is required)
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...
+```
+
+| Variable | Description |
+|----------|-------------|
+| `AI_PROVIDER` | `"openai"` or `"gemini"` (default: `gemini`) |
+| `OPENAI_API_KEY` | Required when `AI_PROVIDER=openai` |
+| `GEMINI_API_KEY` | Required when `AI_PROVIDER=gemini` |
+
+If no API keys are configured, the app will use a mock response for development.
+
 ## Getting Started
 
 First, run the development server:

@@ -45,6 +45,7 @@ export const GenerativeFurniture: React.FC<GenerativeFurnitureProps> = ({
       // We inject React, THREE, and Drei into the scope
       const scope = {
         React,
+        THREE, // Explicitly expose the THREE namespace
         ...THREE,
         ...Drei,
       };
