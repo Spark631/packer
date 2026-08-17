@@ -563,9 +563,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialState }) => {
                           onDragMove: (e: any) => handleDragMove(item.id, e),
                           onDragEnd: (e: any) => handleDragEnd(item.id, e),
                           dragBoundFunc: (pos: { x: number, y: number }) => {
-                              // Only snap in 2D mode here. Iso mode is handled in IsoScene.
-                              if (viewMode === 'iso') return pos;
-                              
+                              // This is the 2D branch; iso snapping is handled in IsoScene.
                               const parentAbsX = groupX + contentOffsetX;
                               const parentAbsY = groupY + contentOffsetY;
                               

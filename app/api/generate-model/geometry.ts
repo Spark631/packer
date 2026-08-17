@@ -424,6 +424,24 @@ export function fitToUnitBox(parts: PlacedPart[]): void {
   }
 }
 
+// How deep the furniture is front-to-back, as a multiple of its width.
+//
+// A photo only shows an elevation, so the crop can measure width and standing height but
+// never floor depth. The analysis does carry it: the parts occupy a unit box whose z
+// extent is the depth the model inferred from perspective cues. Returning the ratio lets
+// the caller turn a measured width into a plausible footprint.
+export function footprintDepthRatio(parts: PlacedPart[]): number | null {
+  if (parts.length === 0) return null;
+  const box = boxOf(parts);
+  const width = box.max.x - box.min.x;
+  const depth = box.max.z - box.min.z;
+  if (!isFinite(width) || !isFinite(depth) || width < EPSILON || depth < EPSILON) return null;
+
+  // Clamp to a sane furniture range: a 5x-deeper-than-wide result is a bad analysis,
+  // not a real piece of furniture.
+  return Math.min(Math.max(depth / width, 0.2), 3);
+}
+
 // Full repair pipeline: validate, expand repeats and curves, connect stray parts, reframe.
 export function normalizeParts(parts: FurniturePart[]): PlacedPart[] {
   const placed: PlacedPart[] = [];

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { FurnitureAnalysis, PlacedPart, normalizeParts } from './geometry';
+import {
+  FurnitureAnalysis,
+  PlacedPart,
+  normalizeParts,
+  footprintDepthRatio,
+} from './geometry';
 
 type Provider = 'gemini' | 'openai';
 
@@ -194,8 +199,13 @@ function generatePartCode(part: PlacedPart, index: number): string {
   return generateMeshCode(part.shape, geoArgs, position, rotation, `${partName}-${index}`);
 }
 
-// Main function: Generate complete React component code from analysis
-function generateCodeFromAnalysis(analysis: FurnitureAnalysis): string {
+// Main function: Generate complete React component code from analysis.
+// Also reports the footprint depth ratio, which the caller needs because a photo can
+// only measure width and standing height - never how deep the piece sits on the floor.
+function generateCodeFromAnalysis(analysis: FurnitureAnalysis): {
+  code: string;
+  depthRatio: number | null;
+} {
   const parts = normalizeParts(analysis.parts);
 
   if (parts.length === 0) {
@@ -210,13 +220,15 @@ function generateCodeFromAnalysis(analysis: FurnitureAnalysis): string {
     .join('')
     .replace(/[^a-zA-Z0-9]/g, '');
   
-  return `export default function ${componentName || 'GeneratedFurniture'}({ width, height, depth, color }) {
+  const code = `export default function ${componentName || 'GeneratedFurniture'}({ width, height, depth, color }) {
   return (
     <group>
 ${meshCode.join('\n')}
     </group>
   );
 }`;
+
+  return { code, depthRatio: footprintDepthRatio(parts) };
 }
 
 // Clean up response if wrapped in markdown or JSON blocks
@@ -402,10 +414,11 @@ export default function GeneratedFurniture({ width, height, depth, color }) {
     // STEP 2: Generate code from analysis (deterministic)
     // ===========================================
     console.log('Step 2: Generating code from analysis...');
-    const code = generateCodeFromAnalysis(analysis);
+    const { code, depthRatio } = generateCodeFromAnalysis(analysis);
     console.log('Generated code:', code);
+    console.log('Footprint depth ratio:', depthRatio);
 
-    return NextResponse.json({ code, analysis });
+    return NextResponse.json({ code, analysis, depthRatio });
 
   } catch (error: unknown) {
     console.error('AI Generation Error:', error);

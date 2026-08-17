@@ -28,8 +28,10 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showPromptInput, setShowPromptInput] = useState(false);
+  // When set, the details dialog is open; the value is whether it will also generate 3D.
+  const [pendingGenerate3D, setPendingGenerate3D] = useState<boolean | null>(null);
   const [userPrompt, setUserPrompt] = useState("");
+  const [userDepth, setUserDepth] = useState("");
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -123,9 +125,10 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
     const ppi = calculatePixelsPerInch();
     if (ppi === 0) return;
 
-    // Real world dimensions
+    // The crop measures an ELEVATION: how wide the piece is, and how tall it stands.
+    // It says nothing about how deep it sits on the floor - see footprintDepth below.
     const widthInInches = cropRect.width / ppi;
-    const heightInInches = cropRect.height / ppi;
+    const standingHeightInInches = cropRect.height / ppi;
 
     // Create a cropped version of the image for the final item
     // We can do this using a temporary canvas
@@ -152,25 +155,27 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
     const croppedDataUrl = canvas.toDataURL("image/png");
 
     let proceduralCode: string | undefined = undefined;
+    let depthRatio: number | null = null;
 
     if (generate3D) {
        setIsGenerating(true);
        try {
           // Remove prefix for API
           const base64Image = croppedDataUrl.split(',')[1];
-          
+
           const res = await fetch('/api/generate-model', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
+              body: JSON.stringify({
                   image: base64Image,
-                  prompt: `The user describes this object as: "${userPrompt}". Create a 3D model that matches this description and the provided image shape.` 
+                  prompt: `The user describes this object as: "${userPrompt}". Create a 3D model that matches this description and the provided image shape.`
               })
           });
-          
+
           const data = await res.json();
           if (data.code) {
              proceduralCode = data.code;
+             if (typeof data.depthRatio === 'number') depthRatio = data.depthRatio;
           } else {
              alert("Failed to generate 3D model, saving as image only.");
           }
@@ -182,12 +187,24 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
        }
     }
 
+    // Floor depth, in priority order: what the user typed, what the AI inferred from the
+    // image, or a square footprint as a last resort. Using the crop's height here (as an
+    // earlier version did) made every item as deep as it is tall - a 31" chair ate 31"
+    // of floor.
+    const typedDepth = Number(userDepth);
+    const footprintDepth =
+      userDepth.trim() !== "" && isFinite(typedDepth) && typedDepth > 0
+        ? typedDepth
+        : depthRatio !== null
+          ? widthInInches * depthRatio
+          : widthInInches;
+
     const newItem: FurnitureItem = {
       id: Date.now().toString(),
       type: "custom",
       width: Math.round(widthInInches),
-      height: Math.round(heightInInches),
-      depth: 24, // Default depth, or maybe we can guess/ask?
+      height: Math.max(1, Math.round(footprintDepth)), // Depth on the floor
+      depth: Math.max(1, Math.round(standingHeightInInches)), // Height off the floor
       x: 0, // Will be centered in room by parent
       y: 0,
       rotation: 0,
@@ -348,9 +365,9 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
                     Back
                   </button>
                   
-                  <button 
+                  <button
                     disabled={!cropRect || cropRect.width === 0 || isGenerating}
-                    onClick={() => setShowPromptInput(true)}
+                    onClick={() => setPendingGenerate3D(true)}
                     className="flex items-center gap-2 bg-purple-600 disabled:bg-gray-300 text-white px-6 py-2 rounded-lg font-medium transition-colors mr-2"
                   >
                     {isGenerating ? "Analyzing..." : (
@@ -360,9 +377,9 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
                     )}
                   </button>
 
-                  <button 
+                  <button
                     disabled={!cropRect || cropRect.width === 0 || isGenerating}
-                    onClick={() => handleSave(false)}
+                    onClick={() => setPendingGenerate3D(false)}
                     className="flex items-center gap-2 bg-green-600 disabled:bg-gray-300 text-white px-6 py-2 rounded-lg font-medium transition-colors"
                   >
                     Save as Image <Check size={18} />
@@ -373,43 +390,88 @@ const ImageModelCreator: React.FC<ImageModelCreatorProps> = ({ onClose, onSave }
         </div>
       </div>
       
-      {showPromptInput && (
+      {pendingGenerate3D !== null && (() => {
+        const ppi = calculatePixelsPerInch();
+        const measuredWidth = ppi > 0 && cropRect ? Math.round(cropRect.width / ppi) : 0;
+        const measuredHeight = ppi > 0 && cropRect ? Math.round(cropRect.height / ppi) : 0;
+        const generating = pendingGenerate3D;
+
+        return (
         <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-xl font-bold mb-2">Describe the Object</h3>
+            <h3 className="text-xl font-bold mb-2">
+              {generating ? "Describe the Object" : "Object Details"}
+            </h3>
+
             <p className="text-gray-500 mb-4 text-sm">
-              Help the AI understand what it's looking at (e.g., "A wooden dining chair with round legs").
+              Measured from your crop: <strong>{measuredWidth}&quot;</strong> wide,{" "}
+              <strong>{measuredHeight}&quot;</strong> tall.
             </p>
-            
+
+            {generating && (
+              <>
+                <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+                  Description
+                </label>
+                <input
+                  type="text"
+                  value={userPrompt}
+                  onChange={(e) => setUserPrompt(e.target.value)}
+                  placeholder="e.g. Modern office chair"
+                  className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-purple-600 outline-none"
+                  autoFocus
+                />
+              </>
+            )}
+
+            <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+              Depth, front to back (in)
+            </label>
             <input
-              type="text"
-              value={userPrompt}
-              onChange={(e) => setUserPrompt(e.target.value)}
-              placeholder="e.g. Modern office chair"
-              className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-purple-600 outline-none"
-              autoFocus
+              type="number"
+              min="1"
+              value={userDepth}
+              onChange={(e) => setUserDepth(e.target.value)}
+              placeholder={generating ? "Auto-detect from image" : `${measuredWidth}`}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-2 focus:ring-2 focus:ring-purple-600 outline-none"
+              autoFocus={!generating}
             />
-            
+            <p className="text-gray-400 mb-4 text-xs">
+              A photo can&apos;t show how deep the piece is.{" "}
+              {generating
+                ? "Leave blank and the AI will estimate it from the image."
+                : "Leave blank to assume a square footprint."}
+            </p>
+
             <div className="flex justify-end gap-3">
-              <button 
-                onClick={() => setShowPromptInput(false)}
+              <button
+                onClick={() => setPendingGenerate3D(null)}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={() => {
-                  setShowPromptInput(false);
-                  handleSave(true);
+                  setPendingGenerate3D(null);
+                  handleSave(generating);
                 }}
-                className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium flex items-center gap-2"
+                className={`px-6 py-2 text-white rounded-lg font-medium flex items-center gap-2 ${
+                  generating
+                    ? "bg-purple-600 hover:bg-purple-700"
+                    : "bg-green-600 hover:bg-green-700"
+                }`}
               >
-                Generate <Sparkles size={16} />
+                {generating ? (
+                  <>Generate <Sparkles size={16} /></>
+                ) : (
+                  <>Save <Check size={16} /></>
+                )}
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

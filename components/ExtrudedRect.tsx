@@ -20,9 +20,6 @@ interface ExtrudedRectProps {
   onTap?: (e: any) => void;
   onDragEnd?: (e: any) => void;
   onDragMove?: (e: any) => void;
-  onDragEnd?: (e: any) => void;
-  onClick?: (e: any) => void;
-  onTap?: (e: any) => void;
   draggable?: boolean;
   dragBoundFunc?: (pos: { x: number; y: number }) => { x: number; y: number };
 }
